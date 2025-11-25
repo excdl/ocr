@@ -12,9 +12,9 @@
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
 .container{width:92%;max-width:500px;margin:28px auto;background:white;border-radius:14px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,0.1);}
-button{background:#2979ff;color:white;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-size:16px;width:48%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.15s;}
-button:disabled{opacity:0.5;cursor:not-allowed;}
-button:active{transform:scale(0.96);}
+button, label{background:#2979ff;color:white;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-size:16px;width:48%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.15s;text-align:center;display:inline-block;}
+button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
+button:active,label:active{transform:scale(0.96);}
 .upload-box{display:flex;justify-content:space-between;margin-bottom:18px;}
 video{width:100%;display:none;border-radius:12px;margin-top:12px;}
 pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;overflow-y:auto;margin-top:20px;}
@@ -27,11 +27,12 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 <script>
 let openCVReady=false;
 
+// OpenCV 載入完成回呼
 function onOpenCvReady(){
     openCVReady=true;
     document.getElementById("status").innerText="OpenCV 載入完成，可開始辨識！";
-    document.getElementById("fileInput").disabled=false;
-    document.getElementById("cameraBtn").disabled=false;
+    document.getElementById("uploadBtn").classList.remove("disabled");
+    document.getElementById("cameraBtn").classList.remove("disabled");
 }
 </script>
 
@@ -51,9 +52,10 @@ function onOpenCvReady(){
   <h2>護照 / 台胞證 OCR 辨識</h2>
 
   <div class="upload-box">
-    <input type="file" id="fileInput" accept="image/*" hidden disabled>
-    <button onclick="document.getElementById('fileInput').click()" id="uploadBtn" disabled>📤 上傳圖片</button>
-    <button id="cameraBtn" disabled>📷 使用相機</button>
+    <!-- 隱藏 input，但不要 disabled -->
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <label id="uploadBtn" class="disabled" for="fileInput">📤 上傳圖片</label>
+    <button id="cameraBtn" class="disabled">📷 使用相機</button>
   </div>
 
   <video id="camera" autoplay playsinline></video>
@@ -64,7 +66,7 @@ function onOpenCvReady(){
 </div>
 
 <script>
-const SCRIPT_URL="https://script.google.com/macros/s/AKfycbz62oZJQopNZmWMZLiFvIBEj-ktwO8OA_cbMUt2m1KGmedkCcdemcvQTyvIDJPhBYwV/exec"; // <-- 改成你的 GAS Web App URL
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzvKoYxbt5ha-o86IIs8GbmzVtviw_xqdP6O-zhg7BycRoBWZq7vQyKi3YqRb9Nasqb/exec"; // <-- 改成你的 GAS Web App URL
 const loaderMask=document.getElementById("loaderMask");
 const result=document.getElementById("result");
 
@@ -206,14 +208,14 @@ async function processImage(file){
 }
 
 /* 上傳 */
-const fileInput=document.getElementById("fileInput");
-fileInput.onchange=e=>{if(e.target.files.length>0)processImage(e.target.files[0]);};
+document.getElementById("fileInput").onchange=e=>{if(e.target.files.length>0)processImage(e.target.files[0]);};
 
 /* 相機 */
 const cameraBtn=document.getElementById("cameraBtn");
 const camera=document.getElementById("camera");
 const capture=document.getElementById("capture");
 cameraBtn.onclick=async()=>{
+  if(cameraBtn.classList.contains("disabled")) return;
   const stream=await navigator.mediaDevices.getUserMedia({video:true});
   camera.srcObject=stream;camera.style.display="block";capture.style.display="block";
 };
