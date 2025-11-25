@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR 辨識</title>
+<title>護照 / 台胞證 OCR 即時版</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
@@ -15,7 +15,7 @@ button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
 video{width:100%;display:none;border-radius:12px;margin-top:12px;}
 pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;overflow-y:auto;margin-top:20px;}
 #loaderMask{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:none;justify-content:center;align-items:center;z-index:9999;}
-.loader{border:6px solid #ddd;border-top:6px solid #2979ff;border-radius:50%;width:60px;height:60px;animation:spin .9s linear infinite;}
+.loader{border:6px solid #ddd;border-top:6px solid #2979ff;border-radius:50%;width:60px;height:60px;animation:spin .5s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 .loader-text{color:white;margin-top:16px;font-size:18px;}
 .progress-container{width:100%;background:#ddd;border-radius:10px;height:20px;margin-top:12px;display:none;}
@@ -34,7 +34,7 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 </div>
 
 <div class="container">
-  <h2>護照 / 台胞證 OCR 辨識</h2>
+  <h2>護照 / 台胞證 OCR 即時版</h2>
   <div class="upload-box">
     <input type="file" id="fileInput" accept="image/*" hidden>
     <label id="uploadBtn" class="disabled" for="fileInput">📤 上傳圖片</label>
@@ -80,7 +80,6 @@ function updateMRZPreview(text){
 function setLoaderText(text){
     document.getElementById("loaderText").innerText=text;
 }
-
 function imgToMat(blob){
     return new Promise(resolve=>{
         let img=new Image();
@@ -96,29 +95,61 @@ function imgToMat(blob){
 }
 
 // ===============================
-// MRZ OCR with progress & error handling (eng 替代 OCRB)
+// Tesseract Worker (即時加速版)
+const worker = Tesseract.createWorker({
+    logger: m => {
+        if(m.status==='recognizing text'){
+            let pct=Math.floor(m.progress*100);
+            updateProgress(pct);
+            if(m.text) updateMRZPreview(m.text.replace(/\s/g,''));
+        }
+    }
+});
+async function initWorker(){
+    await worker.loadLanguage('eng+chi_tra');
+    await worker.initialize('eng+chi_tra');
+}
+initWorker();
+
+// ===============================
+// 自動旋轉
+// ===============================
+function autoRotateMat(src){
+    let rotated = src.clone();
+    if(src.cols < src.rows){
+        let M = cv.getRotationMatrix2D(new cv.Point(src.cols/2, src.rows/2), 90,1);
+        let dst = new cv.Mat();
+        cv.warpAffine(src,dst,M,new cv.Size(src.rows, src.cols));
+        rotated.delete(); M.delete();
+        rotated = dst;
+    }
+    return rotated;
+}
+
+// ===============================
+// 即時 MRZ OCR
 // ===============================
 async function ocrMRZ(mat){
-    setLoaderText("辨識 MRZ…");
+    setLoaderText("裁切 MRZ 區域…");
+    let rotated = autoRotateMat(mat);
+
+    const mrzY = Math.floor(rotated.rows * 0.75);
+    const mrzH = rotated.rows - mrzY;
+    let mrzMat = rotated.roi(new cv.Rect(0, mrzY, rotated.cols, mrzH));
+
+    // 灰階 + 縮小 + 二值化
+    cv.cvtColor(mrzMat, mrzMat, cv.COLOR_RGBA2GRAY);
+    let scale = 600 / mrzMat.cols;
+    cv.resize(mrzMat, mrzMat, new cv.Size(600, Math.floor(mrzMat.rows*scale)));
+    cv.threshold(mrzMat,mrzMat,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+
     let canvas=document.createElement("canvas");
-    cv.imshow(canvas, mat);
+    cv.imshow(canvas, mrzMat);
     let blob=await new Promise(r=>canvas.toBlob(r,"image/png"));
-    
-    const worker = await Tesseract.createWorker({
-        logger: m => {
-            if(m.status==='recognizing text'){
-                let pct=Math.floor(m.progress*100);
-                updateProgress(pct);
-                if(m.text) updateMRZPreview(m.text.replace(/\s/g,''));
-            }
-        }
-    });
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
 
     let data=null;
     try{
-        const { data: { text } } = await worker.recognize(blob);
+        const { data: { text } } = await worker.recognize(blob, {tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<'} );
         let clean = text.replace(/[^A-Z0-9<]/g,'');
         updateMRZPreview(clean);
 
@@ -136,35 +167,42 @@ async function ocrMRZ(mat){
                     raw: clean
                 };
             }
-        } catch(e){
-            data = null;
-        }
-    } catch(e){
-        data = null;
-    }
+        } catch(e){ data=null; }
+    } catch(e){ data=null; }
 
-    await worker.terminate();
+    rotated.delete(); mrzMat.delete();
     return data;
 }
 
 // ===============================
-// 台胞證 OCR
+// 即時台胞證 OCR
 // ===============================
 async function ocrTaiwanPermit(mat){
-    setLoaderText("辨識台胞證…");
+    setLoaderText("裁切台胞證區域…");
+    let rotated = autoRotateMat(mat);
+
     let gray = new cv.Mat();
-    cv.cvtColor(mat,gray,cv.COLOR_RGBA2GRAY);
+    cv.cvtColor(rotated,gray,cv.COLOR_RGBA2GRAY);
     cv.threshold(gray,gray,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
 
-    let nameROI=gray.roi(new cv.Rect(150,60,gray.cols-160,60));
-    let birthROI=gray.roi(new cv.Rect(150,130,300,50));
-    let expROI=gray.roi(new cv.Rect(500,130,250,50));
+    function roi(rectRatio){
+        return gray.roi(new cv.Rect(
+            Math.floor(rectRatio.x*gray.cols),
+            Math.floor(rectRatio.y*gray.rows),
+            Math.floor(rectRatio.w*gray.cols),
+            Math.floor(rectRatio.h*gray.rows)
+        ));
+    }
+
+    const nameROI = roi({x:0.05,y:0.10,w:0.90,h:0.12});
+    const birthROI = roi({x:0.05,y:0.25,w:0.55,h:0.08});
+    const expROI = roi({x:0.65,y:0.25,w:0.30,h:0.08});
 
     async function roiToText(roi){
         let c=document.createElement("canvas"); c.width=roi.cols; c.height=roi.rows;
         cv.imshow(c,roi);
         let blob=await new Promise(r=>c.toBlob(r,"image/png"));
-        const {data:{text}}=await Tesseract.recognize(blob,{lang:"eng+chi_tra"});
+        const {data:{text}} = await worker.recognize(blob);
         return text.trim();
     }
 
@@ -172,7 +210,7 @@ async function ocrTaiwanPermit(mat){
     let birthday = await roiToText(birthROI);
     let expiry = await roiToText(expROI);
 
-    nameROI.delete(); birthROI.delete(); expROI.delete(); gray.delete();
+    nameROI.delete(); birthROI.delete(); expROI.delete(); gray.delete(); rotated.delete();
     return {documentType:"Taiwan Compatriot Permit",name,birthday,expiry};
 }
 
@@ -186,7 +224,6 @@ async function processImage(file){
     setLoaderText("讀取影像…");
     let mat = await imgToMat(file);
 
-    // 嘗試 MRZ OCR
     let mrzData = await ocrMRZ(mat);
 
     let finalData=null;
@@ -201,7 +238,6 @@ async function processImage(file){
     mat.delete();
     document.getElementById("result").innerText=JSON.stringify(finalData,null,2);
 
-    // 寫入 Google Sheet
     setLoaderText("寫入 Google Sheet…");
     await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(finalData)});
     setLoaderText("🎉 已寫入 Google Sheet！");
@@ -209,15 +245,10 @@ async function processImage(file){
 }
 
 // ===============================
-// 上傳圖片
+// 上傳圖片 & 相機拍照
 // ===============================
-document.getElementById("fileInput").onchange = e => {
-    if(e.target.files.length>0) processImage(e.target.files[0]);
-};
+document.getElementById("fileInput").onchange = e => { if(e.target.files.length>0) processImage(e.target.files[0]); };
 
-// ===============================
-// 相機拍照
-// ===============================
 const cameraBtn=document.getElementById("cameraBtn");
 const camera=document.getElementById("camera");
 const capture=document.getElementById("capture");
@@ -236,6 +267,7 @@ capture.onclick=()=>{
 </script>
 </body>
 </html>
+
 
 
 
