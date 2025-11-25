@@ -3,16 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 辨識</title>
-
-<!-- Tesseract -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-
-<!-- MRZ Parser -->
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
-
-<!-- OpenCV -->
 <script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
-
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
 .container{width:92%;max-width:500px;margin:28px auto;background:white;border-radius:14px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,0.1);}
@@ -25,6 +18,8 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 .loader{border:6px solid #ddd;border-top:6px solid #2979ff;border-radius:50%;width:60px;height:60px;animation:spin .9s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 .loader-text{color:white;margin-top:16px;font-size:18px;}
+.progress-container{width:100%;background:#ddd;border-radius:10px;height:20px;margin-top:12px;display:none;}
+.progress-bar{height:100%;width:0%;background:#2979ff;border-radius:10px;text-align:center;color:white;font-size:12px;line-height:20px;}
 </style>
 </head>
 <body>
@@ -32,7 +27,9 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 <div id="loaderMask">
   <div>
     <div class="loader"></div>
-    <div class="loader-text">正在處理中…</div>
+    <div class="loader-text" id="loaderText">正在處理中…</div>
+    <div class="progress-container"><div id="progressBar" class="progress-bar">0%</div></div>
+    <pre id="mrzPreview"></pre>
   </div>
 </div>
 
@@ -62,8 +59,27 @@ cv['onRuntimeInitialized'] = () => {
 // ===============================
 // 工具函式
 // ===============================
-function showLoader(){ document.getElementById("loaderMask").style.display="flex"; }
-function hideLoader(){ document.getElementById("loaderMask").style.display="none"; }
+function showLoader(){ 
+    document.getElementById("loaderMask").style.display="flex"; 
+    document.querySelector(".progress-container").style.display="block";
+    updateProgress(0); 
+    document.getElementById("mrzPreview").innerText="";
+    document.getElementById("loaderText").innerText="正在處理中…";
+}
+function hideLoader(){ 
+    document.getElementById("loaderMask").style.display="none"; 
+}
+function updateProgress(percent){
+    const bar=document.getElementById("progressBar");
+    bar.style.width=percent+"%";
+    bar.innerText=percent+"%";
+}
+function updateMRZPreview(text){
+    document.getElementById("mrzPreview").innerText=text;
+}
+function setLoaderText(text){
+    document.getElementById("loaderText").innerText=text;
+}
 
 function imgToMat(blob){
     return new Promise(resolve=>{
@@ -80,119 +96,64 @@ function imgToMat(blob){
 }
 
 // ===============================
-// 自動旋轉校正
+// MRZ OCR with progress & error handling
 // ===============================
-function autoRotate(src){
-    let gray=new cv.Mat();
-    cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
-    let edges=new cv.Mat();
-    cv.Canny(gray,edges,50,200);
-    let lines=new cv.Mat();
-    cv.HoughLinesP(edges,lines,1,Math.PI/180,80,100,10);
-    if(lines.rows===0){ gray.delete(); edges.delete(); lines.delete(); return src;}
-    let angles=[];
-    for(let i=0;i<lines.rows;i++){
-        let p=lines.intPtr(i); angles.push(Math.atan2(p[3]-p[1],p[2]-p[0])*180/Math.PI);}
-    let avgAngle=angles.reduce((a,b)=>a+b,0)/angles.length;
-    if(Math.abs(avgAngle)<1){ gray.delete(); edges.delete(); lines.delete(); return src;}
-    let center=new cv.Point(src.cols/2,src.rows/2);
-    let rotMat=cv.getRotationMatrix2D(center,avgAngle,1);
-    let dst=new cv.Mat();
-    cv.warpAffine(src,dst,rotMat,new cv.Size(src.cols,src.rows),cv.INTER_LINEAR,cv.BORDER_REPLICATE);
-    gray.delete(); edges.delete(); lines.delete(); rotMat.delete(); src.delete();
-    return dst;
-}
-
-// ===============================
-// 影像增強
-// ===============================
-function enhanceImage(src){
-    let gray=new cv.Mat();
-    cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
-    let clahe=new cv.CLAHE(3.0,new cv.Size(8,8)); clahe.apply(gray,gray);
-    let blur=new cv.Mat(); cv.GaussianBlur(gray,blur,new cv.Size(0,0),3);
-    cv.addWeighted(gray,1.7,blur,-0.7,0,gray);
-    blur.delete(); src.delete();
-    return gray;
-}
-
-// ===============================
-// MRZ 偵測
-// ===============================
-function detectMRZ(gray){
-    let sobel=new cv.Mat();
-    cv.Sobel(gray,sobel,cv.CV_8U,1,0,3);
-    let binary=new cv.Mat();
-    cv.threshold(sobel,binary,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
-    let kernel=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(25,5));
-    cv.morphologyEx(binary,binary,cv.MORPH_CLOSE,kernel);
-    let contours=new cv.MatVector();
-    let hierarchy=new cv.Mat();
-    cv.findContours(binary,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-    let mrzRect=null,maxWidth=0;
-    for(let i=0;i<contours.size();i++){
-        let cnt=contours.get(i);
-        let rect=cv.boundingRect(cnt);
-        if(rect.width>maxWidth && rect.height>gray.rows*0.03 && rect.y>gray.rows*0.55){
-            maxWidth=rect.width; mrzRect=rect;
+async function ocrMRZ(mat){
+    setLoaderText("辨識 MRZ…");
+    let canvas=document.createElement("canvas");
+    cv.imshow(canvas, mat);
+    let blob=await new Promise(r=>canvas.toBlob(r,"image/png"));
+    
+    const worker = await Tesseract.createWorker({
+        logger: m => {
+            if(m.status==='recognizing text'){
+                let pct=Math.floor(m.progress*100);
+                updateProgress(pct);
+                if(m.text) updateMRZPreview(m.text.replace(/\s/g,''));
+            }
         }
-        cnt.delete();
-    }
-    contours.delete(); hierarchy.delete(); sobel.delete(); binary.delete();
-    if(!mrzRect) return null;
-    let mrz=gray.roi(new cv.Rect(mrzRect.x,mrzRect.y,mrzRect.width,mrzRect.height));
-    return mrz;
-}
+    });
+    await worker.loadLanguage('ocrb');
+    await worker.initialize('ocrb');
 
-// ===============================
-// MRZ OCR
-// ===============================
-async function ocrMRZ(mrzMat){
-    let c=document.createElement("canvas");
-    c.width=mrzMat.cols; c.height=mrzMat.rows;
-    cv.imshow(c,mrzMat);
-    let blob=await new Promise(r=>c.toBlob(r,"image/png"));
+    let data=null;
+    try{
+        const { data: { text } } = await worker.recognize(blob);
+        let clean = text.replace(/[^A-Z0-9<]/g,'');
+        updateMRZPreview(clean);
 
-    async function tryOCR(blob){
-        const {data:{text}}=await Tesseract.recognize(blob,{
-            lang:"ocrb",
-            tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
-        });
-        let clean=text.replace(/\s+/g,'');
         try{
-            let parsed=MRZ.parse(clean);
-            if(parsed.valid){ return {
-                documentType:"Passport",
-                name:parsed.fields.surname+" "+parsed.fields.givenNames,
-                id:parsed.fields.documentNumber,
-                nationality:parsed.fields.nationality,
-                birthday:parsed.fields.dateOfBirth,
-                expiry:parsed.fields.expirationDate,
-                sex:parsed.fields.sex,
-                raw:clean
-            }; }
-        }catch(e){ return null;}
-        return null;
+            let parsed = MRZ.parse(clean);
+            if(parsed.valid){
+                data = {
+                    documentType:"Passport",
+                    name: parsed.fields.surname + " " + parsed.fields.givenNames,
+                    id: parsed.fields.documentNumber,
+                    nationality: parsed.fields.nationality,
+                    birthday: parsed.fields.dateOfBirth,
+                    expiry: parsed.fields.expirationDate,
+                    sex: parsed.fields.sex,
+                    raw: clean
+                };
+            }
+        } catch(e){
+            data = null;
+        }
+    } catch(e){
+        data = null;
     }
 
-    let res=await tryOCR(blob);
-    if(res) return res;
-
-    // 嘗試旋轉 180° OCR
-    let c2=document.createElement("canvas");
-    c2.width=c.width; c2.height=c.height;
-    let ctx=c2.getContext("2d");
-    ctx.translate(c2.width/2,c2.height/2); ctx.rotate(Math.PI); ctx.drawImage(c,-c.width/2,-c.height/2);
-    let blob2=await new Promise(r=>c2.toBlob(r,"image/png"));
-    return await tryOCR(blob2);
+    await worker.terminate();
+    return data;
 }
 
 // ===============================
 // 台胞證 OCR
 // ===============================
-async function ocrTaiwanPermit(src){
-    let gray=new cv.Mat();
-    cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+async function ocrTaiwanPermit(mat){
+    setLoaderText("辨識台胞證…");
+    let gray = new cv.Mat();
+    cv.cvtColor(mat,gray,cv.COLOR_RGBA2GRAY);
     cv.threshold(gray,gray,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
 
     let nameROI=gray.roi(new cv.Rect(150,60,gray.cols-160,60));
@@ -203,16 +164,15 @@ async function ocrTaiwanPermit(src){
         let c=document.createElement("canvas"); c.width=roi.cols; c.height=roi.rows;
         cv.imshow(c,roi);
         let blob=await new Promise(r=>c.toBlob(r,"image/png"));
-        let {data:{text}}=await Tesseract.recognize(blob,{lang:"eng+chi_tra"});
+        const {data:{text}}=await Tesseract.recognize(blob,{lang:"eng+chi_tra"});
         return text.trim();
     }
 
-    let name=await roiToText(nameROI);
-    let birthday=await roiToText(birthROI);
-    let expiry=await roiToText(expROI);
+    let name = await roiToText(nameROI);
+    let birthday = await roiToText(birthROI);
+    let expiry = await roiToText(expROI);
 
     nameROI.delete(); birthROI.delete(); expROI.delete(); gray.delete();
-
     return {documentType:"Taiwan Compatriot Permit",name,birthday,expiry};
 }
 
@@ -223,31 +183,35 @@ const SCRIPT_URL="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"; // <-
 
 async function processImage(file){
     showLoader();
-    status.innerText="讀取影像中…";
+    setLoaderText("讀取影像…");
+    let mat = await imgToMat(file);
 
-    let src=await imgToMat(file);
-    status.innerText="自動旋轉校正…"; src=autoRotate(src);
-    status.innerText="影像增強…"; let enhanced=enhanceImage(src);
-    status.innerText="偵測 MRZ…"; let mrzMat=detectMRZ(enhanced);
+    // 嘗試 MRZ OCR
+    let mrzData = await ocrMRZ(mat);
 
-    let data=null;
-    if(mrzMat){ status.innerText="辨識護照 MRZ…"; data=await ocrMRZ(mrzMat); mrzMat.delete(); }
-    if(!data){ status.innerText="辨識台胞證…"; data=await ocrTaiwanPermit(src); }
+    let finalData=null;
+    if(mrzData){
+        finalData = mrzData;
+        setLoaderText("護照辨識完成");
+    } else {
+        finalData = await ocrTaiwanPermit(mat);
+        setLoaderText("台胞證辨識完成");
+    }
 
-    src.delete(); enhanced.delete();
-    result.innerText=JSON.stringify(data,null,2);
+    mat.delete();
+    document.getElementById("result").innerText=JSON.stringify(finalData,null,2);
 
     // 寫入 Google Sheet
-    status.innerText="寫入 Google Sheet…";
-    await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
-    status.innerText="🎉 已寫入 Google Sheet！";
+    setLoaderText("寫入 Google Sheet…");
+    await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(finalData)});
+    setLoaderText("🎉 已寫入 Google Sheet！");
     hideLoader();
 }
 
 // ===============================
 // 上傳圖片
 // ===============================
-document.getElementById("fileInput").onchange=e=>{
+document.getElementById("fileInput").onchange = e => {
     if(e.target.files.length>0) processImage(e.target.files[0]);
 };
 
@@ -266,11 +230,13 @@ cameraBtn.onclick=async()=>{
 
 capture.onclick=()=>{
     const c=document.createElement("canvas"); c.width=camera.videoWidth; c.height=camera.videoHeight;
-    c.getContext("2d").drawImage(camera,0,0); c.toBlob(blob=>processImage(blob));
+    c.getContext("2d").drawImage(camera,0,0);
+    c.toBlob(blob => processImage(blob));
 };
 </script>
 </body>
 </html>
+
 
 
 
