@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR 可用版</title>
+<title>護照 / 台胞證 OCR 可用版 (錯誤捕捉版)</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <script async src="https://docs.opencv.org/4.9.0/opencv.js"></script>
@@ -20,7 +20,7 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 <body>
 
 <div class="container">
-  <h2>護照 / 台胞證 OCR 可用版</h2>
+  <h2>護照 / 台胞證 OCR 可用版 (錯誤捕捉版)</h2>
   <div class="upload-box">
     <input type="file" id="fileInput" accept="image/*" hidden>
     <label id="uploadBtn" class="disabled" for="fileInput">📤 上傳圖片</label>
@@ -138,7 +138,13 @@ async function processImage(file){
     if(!data) data=await ocrTaiwanPermit(mat);
     mat.delete();
     document.getElementById("result").innerText=JSON.stringify(data,null,2);
-    if(data) await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
+
+    // ✅ 用 try/catch 捕捉 fetch 錯誤，避免 Uncaught (in promise)
+    try{
+        if(data) await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
+    }catch(e){
+        console.warn("寫入 Google Sheet 失敗:", e);
+    }
 }
 
 // ===================== 上傳 & 相機 =====================
@@ -162,6 +168,7 @@ capture.onclick=()=>{
 </script>
 </body>
 </html>
+
 
 
 
