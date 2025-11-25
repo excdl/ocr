@@ -1,246 +1,196 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-<meta charset="UTF-8" />
+<meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 辨識</title>
 
-<!-- OpenCV (async) -->
-<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
-
-<!-- Tesseract OCR -->
+<script src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.7.0/dist/opencv.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-
-<!-- MRZ 專用辨識 -->
 <script src="https://cdn.jsdelivr.net/npm/mrz@3.0.0/dist/mrz.min.js"></script>
 
 <style>
-body { font-family: "Arial"; background: #f2f2f2; }
-.container {
-  width: 90%; max-width: 480px; margin: 20px auto;
-  padding: 20px; background: white; border-radius: 10px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.15);
-}
-.upload-box { display: flex; justify-content: space-between; }
-button {
-  background: #007bff; color: white; border: none;
-  padding: 10px; border-radius: 6px; cursor: pointer;
-}
-button:hover { background: #0056c1; }
-video { width: 100%; display: none; margin-top: 10px; border-radius: 10px; }
-pre { background:#222; color:#0f0; padding:10px; border-radius:6px; height:160px;overflow-y:auto; }
+body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
+.container{width:92%;max-width:500px;margin:28px auto;background:white;border-radius:14px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,0.1);}
+button{background:#2979ff;color:white;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-size:16px;width:48%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.15s;}
+button:active{transform:scale(0.96);}
+.upload-box{display:flex;justify-content:space-between;margin-bottom:18px;}
+video{width:100%;display:none;border-radius:12px;margin-top:12px;}
+pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;overflow-y:auto;margin-top:20px;}
+#loaderMask{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:none;justify-content:center;align-items:center;z-index:9999;}
+.loader{border:6px solid #ddd;border-top:6px solid #2979ff;border-radius:50%;width:60px;height:60px;animation:spin .9s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.loader-text{color:white;margin-top:16px;font-size:18px;}
 </style>
-
 </head>
 <body>
 
+<div id="loaderMask">
+  <div>
+    <div class="loader"></div>
+    <div class="loader-text">正在處理中…</div>
+  </div>
+</div>
+
 <div class="container">
-    <h2>護照 / 台胞證 OCR 辨識</h2>
+  <h2>護照 / 台胞證 OCR 辨識</h2>
 
-    <div class="upload-box">
-        <input type="file" id="fileInput" accept="image/*" hidden>
-        <button onclick="document.getElementById('fileInput').click()">📤 上傳圖片</button>
-        <button id="cameraBtn">📷 使用相機</button>
-    </div>
+  <div class="upload-box">
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <button onclick="document.getElementById('fileInput').click()">📤 上傳圖片</button>
+    <button id="cameraBtn">📷 使用相機</button>
+  </div>
 
-    <video id="camera" autoplay playsinline></video>
-    <button id="capture" style="display:none;">拍照</button>
+  <video id="camera" autoplay playsinline></video>
+  <button id="capture" style="display:none;width:100%;margin-top:12px;">📸 拍照</button>
 
-    <p id="status"></p>
-    <pre id="result"></pre>
+  <p id="status">正在載入 OpenCV…</p>
+  <pre id="result"></pre>
 </div>
 
 <script>
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxRw0sVVg_coQBE-JZi2a0WvsEXqCa7lf7u5viiR0qvVpEBWQ8vmCMCbsm5PmFBpLxL/exec";   // ⬅ 修改這裡
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbxRw0sVVg_coQBE-JZi2a0WvsEXqCa7lf7u5viiR0qvVpEBWQ8vmCMCbsm5PmFBpLxL/exec";
+let openCVReady=false;
+cv.onRuntimeInitialized=()=>{openCVReady=true;status.innerText="OpenCV 載入完成，可開始辨識！";}
+function showLoader(){loaderMask.style.display="flex";}
+function hideLoader(){loaderMask.style.display="none";}
 
-let openCVReady = false;
+/* 影像前處理 */
+async function preprocessImage(blob){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement("canvas");
+      c.width=img.width;c.height=img.height;
+      c.getContext("2d").drawImage(img,0,0);
+      let src=cv.imread(c);
+      cv.cvtColor(src,src,cv.COLOR_RGBA2GRAY);
+      cv.threshold(src,src,0,255,cv.THRESH_OTSU+cv.THRESH_BINARY);
+      cv.GaussianBlur(src,src,new cv.Size(3,3),0);
+      cv.imshow(c,src);src.delete();
+      c.toBlob(resolve,"image/jpeg");
+    };
+    img.src=URL.createObjectURL(blob);
+  });
+}
 
-// ==========================
-// 等待 OpenCV 載入
-// ==========================
-document.getElementById("status").innerText = "正在載入 OpenCV，請稍候…";
+/* 裁切 MRZ */
+async function extractMRZ(blob){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      const h=img.height,mrzY=h*0.75,mrzH=h*0.25;
+      const c=document.createElement("canvas");
+      c.width=img.width;c.height=mrzH;
+      c.getContext("2d").drawImage(img,0,mrzY,img.width,mrzH,0,0,img.width,mrzH);
+      c.toBlob(resolve,"image/jpeg");
+    };
+    img.src=URL.createObjectURL(blob);
+  });
+}
 
-window.cv = window.cv || {};
+/* 護照 MRZ 辨識 */
+async function recognizeMRZ(blob){
+  return new Promise(resolve=>{
+    const fr=new FileReader();
+    fr.onload=()=>{
+      const parsed=MRZ.parse(fr.result);
+      resolve(parsed.valid?parsed:null);
+    };
+    fr.readAsText(blob);
+  });
+}
 
-cv.onRuntimeInitialized = () => {
-    openCVReady = true;
-    document.getElementById("status").innerText = "OpenCV 載入完成，可開始上傳圖片！";
+/* OCR */
+async function recognizeOCR(blob){
+  const worker=await Tesseract.createWorker();
+  await worker.loadLanguage("eng+chi_tra");
+  await worker.initialize("eng+chi_tra");
+  const {data:{text}}=await worker.recognize(blob);
+  await worker.terminate();
+  return text;
+}
+
+/* 台胞證日期解析（生日/有效期/簽發日） */
+function extractTaiwanPermitDates(text){
+  function matchFirst(patterns){for(const p of patterns){const m=text.match(p);if(m)return m[0];}return"";}
+  return{
+    birthday:matchFirst([/\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}/,/\d{8}/,/\d{4}年\d{1,2}月\d{1,2}日/]),
+    expiry:matchFirst([/有效期[:：]?\s*\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}/,/\d{8}/,/\d{4}年\d{1,2}月\d{1,2}日/]),
+    issued:matchFirst([/簽發日期[:：]?\s*\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}/,/Issued Date[:：]?\s*\d{8}/,/\d{4}年\d{1,2}月\d{1,2}日/])
+  };
+}
+
+/* OCR 英文姓名/ID/護照號碼 */
+function extractNamesAndIDs(text){
+  const englishName=(text.match(/[A-Z][A-Z ]{1,30}/g)||[""])[0];
+  const id=(text.match(/[A-Z0-9]{6,10}/g)||[""])[0];
+  return {englishName,id};
+}
+
+/* 主流程 */
+async function processImage(file){
+  if(!openCVReady){alert("OpenCV 尚未載入");return;}
+  showLoader();status.innerText="影像處理中…";
+  const processed=await preprocessImage(file);
+  status.innerText="護照 MRZ 辨識中…";
+  const mrzBlob=await extractMRZ(processed);
+  const mrz=await recognizeMRZ(mrzBlob);
+  let data={};
+  if(mrz){
+    status.innerText="✓ 成功辨識護照（MRZ）";
+    data={
+      documentType:"Passport",
+      name:mrz.fields.surname+" "+mrz.fields.givenNames,
+      id:mrz.fields.documentNumber,
+      nationality:mrz.fields.nationality,
+      birthday:mrz.fields.dateOfBirth,
+      expiry:mrz.fields.expirationDate,
+      sex:mrz.fields.sex
+    };
+    result.innerText=JSON.stringify(data,null,2);
+  }else{
+    status.innerText="台胞證 OCR 辨識中…";
+    const text=await recognizeOCR(processed);
+    const dates=extractTaiwanPermitDates(text);
+    const namesIDs=extractNamesAndIDs(text);
+    data={
+      documentType:"Taiwan Compatriot Permit",
+      rawText:text,
+      name:namesIDs.englishName,
+      id:namesIDs.id,
+      birthday:dates.birthday,
+      expiry:dates.expiry,
+      issued:dates.issued
+    };
+    result.innerText=text+"\n\n"+JSON.stringify(data,null,2);
+  }
+  status.innerText="寫入 Google Sheet…";
+  await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
+  status.innerText="🎉 已寫入 Google Sheet！";
+  hideLoader();
+}
+
+/* 上傳 */
+fileInput.onchange=e=>{if(e.target.files.length>0)processImage(e.target.files[0]);};
+
+/* 相機 */
+const cameraBtn=document.getElementById("cameraBtn");
+const camera=document.getElementById("camera");
+const capture=document.getElementById("capture");
+cameraBtn.onclick=async()=>{
+  const stream=await navigator.mediaDevices.getUserMedia({video:true});
+  camera.srcObject=stream;camera.style.display="block";capture.style.display="block";
 };
-
-// ==========================
-// 影像前處理
-// ==========================
-async function preprocessImage(blob) {
-    if (!openCVReady) {
-        alert("OpenCV 尚未載入完成！");
-        return null;
-    }
-
-    return new Promise(resolve => {
-        const img = new Image();
-        img.onload = () => {
-            const c = document.createElement("canvas");
-            c.width = img.width;
-            c.height = img.height;
-            const ctx = c.getContext("2d");
-            ctx.drawImage(img, 0, 0);
-
-            try {
-                const src = cv.imread(c);
-
-                cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY);
-                cv.threshold(src, src, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-                cv.GaussianBlur(src, src, new cv.Size(3,3), 0);
-
-                cv.imshow(c, src);
-                src.delete();
-
-                c.toBlob(resolve, "image/jpeg");
-            } catch (err) {
-                alert("OpenCV 影像處理錯誤：" + err);
-                resolve(blob);
-            }
-        };
-        img.src = URL.createObjectURL(blob);
-    });
-}
-
-// ==========================
-// OCR 主流程
-// ==========================
-async function processImage(file) {
-    if (!openCVReady) {
-        alert("OpenCV 尚未載入完成！");
-        return;
-    }
-
-    status.innerText = "🛠 正在強化影像...";
-    const processed = await preprocessImage(file);
-
-    status.innerText = "🔎 嘗試辨識 MRZ(護照)...";
-
-    // → 裁切 MRZ
-    const mrzBlob = await extractMRZ(processed);
-    const mrz = await recognizeMRZ(mrzBlob);
-
-    let data;
-
-    if (mrz) {
-        status.innerText = "📘 成功辨識護照 MRZ！";
-
-        data = {
-            documentType: "Passport",
-            name: mrz.fields.surname + " " + mrz.fields.givenNames,
-            number: mrz.fields.documentNumber,
-            nationality: mrz.fields.nationality,
-            birthday: mrz.fields.dateOfBirth
-        };
-
-    } else {
-        status.innerText = "📄 辨識台胞證...";
-        const text = await recognizeOCR(processed);
-
-        result.innerText = text;
-
-        data = {
-            documentType: "Taiwan Compatriot Permit",
-            name: (text.match(/[\u4e00-\u9FFF]{2,}/) || [""])[0],
-            number: (text.match(/[A-Z0-9]{6,}/) || [""])[0],
-            nationality: "",
-            birthday: ""
-        };
-    }
-
-    status.innerText = "📤 正在寫入 Google Sheet…";
-
-    await fetch(SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify(data)
-    });
-
-    status.innerText = "🎉 已成功寫入 Google Sheet！";
-}
-
-// ==========================
-// 監聽上傳圖片
-// ==========================
-fileInput.onchange = e => {
-    if (e.target.files.length > 0) {
-        processImage(e.target.files[0]);
-    }
+capture.onclick=()=>{
+  const c=document.createElement("canvas");
+  c.width=camera.videoWidth;c.height=camera.videoHeight;
+  c.getContext("2d").drawImage(camera,0,0);
+  c.toBlob(blob=>processImage(blob));
 };
-
-// ==========================
-// 相機功能
-// ==========================
-const cameraBtn = document.getElementById("cameraBtn");
-const camera = document.getElementById("camera");
-const capture = document.getElementById("capture");
-
-let stream;
-
-cameraBtn.onclick = async () => {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    camera.srcObject = stream;
-    camera.style.display = "block";
-    capture.style.display = "block";
-};
-
-capture.onclick = () => {
-    const c = document.createElement("canvas");
-    c.width = camera.videoWidth;
-    c.height = camera.videoHeight;
-    c.getContext("2d").drawImage(camera, 0, 0);
-    c.toBlob(blob => processImage(blob));
-};
-
-// ==========================
-// 工具：裁切 MRZ 區域
-// ==========================
-async function extractMRZ(blob) {
-    return new Promise(resolve => {
-        const img = new Image();
-        img.onload = () => {
-            const h = img.height;
-            const mrzY = h * 0.80;
-            const mrzH = h * 0.20;
-
-            const c = document.createElement("canvas");
-            c.width = img.width;
-            c.height = mrzH;
-            c.getContext("2d").drawImage(img, 0, mrzY, img.width, mrzH, 0, 0, img.width, mrzH);
-
-            c.toBlob(resolve, "image/jpeg");
-        };
-        img.src = URL.createObjectURL(blob);
-    });
-}
-
-// ==========================
-// 工具：MRZ 專用辨識
-// ==========================
-async function recognizeMRZ(blob) {
-    return new Promise(resolve => {
-        const fr = new FileReader();
-        fr.onload = () => {
-            const parsed = MRZ.parse(fr.result);
-            resolve(parsed.valid ? parsed : null);
-        };
-        fr.readAsText(blob);
-    });
-}
-
-// ==========================
-// 工具：Tesseract 辨識
-// ==========================
-async function recognizeOCR(blob) {
-    const { data: { text } } = await Tesseract.recognize(blob, "eng");
-    return text;
-}
-
 </script>
-
 </body>
 </html>
+
 
 
 
