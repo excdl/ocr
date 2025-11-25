@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 辨識</title>
 
-<!-- OpenCV 官方 CDN -->
+<!-- OpenCV -->
 <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 <!-- Tesseract OCR -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-<!-- MRZ -->
-<script src="https://cdn.jsdelivr.net/npm/mrz@3.0.0/dist/mrz.min.js"></script>
+<!-- MRZ.js -->
+<script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
@@ -51,8 +51,10 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 </div>
 
 <script>
-const SCRIPT_URL="YOUR_SCRIPT_URL_HERE"; // <-- 改成你的 Google Apps Script URL
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbz62oZJQopNZmWMZLiFvIBEj-ktwO8OA_cbMUt2m1KGmedkCcdemcvQTyvIDJPhBYwV/exec"; // <-- 改成你的 GAS Web App URL
 let openCVReady=false;
+const loaderMask=document.getElementById("loaderMask");
+const result=document.getElementById("result");
 
 function onOpenCvReady(){
     openCVReady=true;
@@ -62,7 +64,7 @@ function onOpenCvReady(){
 function showLoader(){loaderMask.style.display="flex";}
 function hideLoader(){loaderMask.style.display="none";}
 
-/* 影像前處理 */
+/* 前處理影像 */
 async function preprocessImage(blob){
   return new Promise(resolve=>{
     const img=new Image();
@@ -97,13 +99,16 @@ async function extractMRZ(blob){
   });
 }
 
-/* 護照 MRZ 辨識 */
+/* MRZ 辨識 */
 async function recognizeMRZ(blob){
   return new Promise(resolve=>{
+    if(typeof MRZ==="undefined"){resolve(null); return;}
     const fr=new FileReader();
     fr.onload=()=>{
-      const parsed=MRZ.parse(fr.result);
-      resolve(parsed.valid?parsed:null);
+      try{
+        const parsed=MRZ.parse(fr.result);
+        resolve(parsed.valid ? parsed : null);
+      }catch(e){ resolve(null); }
     };
     fr.readAsText(blob);
   });
@@ -119,7 +124,7 @@ async function recognizeOCR(blob){
   return text;
 }
 
-/* 台胞證日期解析（生日/有效期/簽發日） */
+/* 台胞證日期解析 */
 function extractTaiwanPermitDates(text){
   function matchFirst(patterns){for(const p of patterns){const m=text.match(p);if(m)return m[0];}return"";}
   return{
@@ -129,23 +134,39 @@ function extractTaiwanPermitDates(text){
   };
 }
 
-/* OCR 英文姓名/ID/護照號碼 */
+/* OCR 英文姓名/ID */
 function extractNamesAndIDs(text){
   const englishName=(text.match(/[A-Z][A-Z ]{1,30}/g)||[""])[0];
   const id=(text.match(/[A-Z0-9]{6,10}/g)||[""])[0];
   return {englishName,id};
 }
 
-/* 主流程 */
+/* 主流程（自動判斷 + MRZ OCR 重試） */
 async function processImage(file){
-  showLoader();document.getElementById("status").innerText="影像處理中…";
+  showLoader(); 
+  document.getElementById("status").innerText="影像處理中…";
+
   const processed=await preprocessImage(file);
+
   document.getElementById("status").innerText="護照 MRZ 辨識中…";
   const mrzBlob=await extractMRZ(processed);
-  const mrz=await recognizeMRZ(mrzBlob);
+  let mrz=await recognizeMRZ(mrzBlob);
+
+  // MRZ 辨識失敗 → 用 OCR 重試
+  if(!mrz){
+    document.getElementById("status").innerText="MRZ 初步失敗，使用 OCR 重試…";
+    const mrzText=await recognizeOCR(mrzBlob);
+    try{
+      const parsed=MRZ.parse(mrzText.replace(/\s/g,''));
+      mrz = parsed.valid ? parsed : null;
+    }catch(e){ mrz=null; }
+  }
+
   let data={};
+
   if(mrz){
-    document.getElementById("status").innerText="✓ 成功辨識護照（MRZ）";
+    // 護照
+    document.getElementById("status").innerText="✓ 護照辨識成功";
     data={
       documentType:"Passport",
       name:mrz.fields.surname+" "+mrz.fields.givenNames,
@@ -157,6 +178,7 @@ async function processImage(file){
     };
     result.innerText=JSON.stringify(data,null,2);
   }else{
+    // 台胞證
     document.getElementById("status").innerText="台胞證 OCR 辨識中…";
     const text=await recognizeOCR(processed);
     const dates=extractTaiwanPermitDates(text);
@@ -172,6 +194,7 @@ async function processImage(file){
     };
     result.innerText=text+"\n\n"+JSON.stringify(data,null,2);
   }
+
   document.getElementById("status").innerText="寫入 Google Sheet…";
   await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
   document.getElementById("status").innerText="🎉 已寫入 Google Sheet！";
