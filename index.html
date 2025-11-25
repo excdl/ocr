@@ -2,10 +2,10 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR 即時預覽版</title>
+<title>護照 / 台胞證 OCR 可用版</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
-<script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
+<script async src="https://docs.opencv.org/4.9.0/opencv.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
 .container{width:92%;max-width:500px;margin:28px auto;background:white;border-radius:14px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,0.1);}
@@ -20,7 +20,7 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 <body>
 
 <div class="container">
-  <h2>護照 / 台胞證 OCR 即時預覽版</h2>
+  <h2>護照 / 台胞證 OCR 可用版</h2>
   <div class="upload-box">
     <input type="file" id="fileInput" accept="image/*" hidden>
     <label id="uploadBtn" class="disabled" for="fileInput">📤 上傳圖片</label>
@@ -34,21 +34,17 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 </div>
 
 <script>
-let worker, workerReady = false;
+let worker, workerReady=false;
 
-// ===============================
-// OpenCV 初始化
-// ===============================
+// ===================== OpenCV 初始化 =====================
 cv['onRuntimeInitialized'] = () => {
     document.getElementById("status").innerText = "OpenCV 載入完成，可開始辨識！";
     document.getElementById("uploadBtn").classList.remove("disabled");
     document.getElementById("cameraBtn").classList.remove("disabled");
-    initWorker(); // OpenCV 載入完成後初始化 Tesseract
+    initWorker();
 };
 
-// ===============================
-// Tesseract Worker 初始化
-// ===============================
+// ===================== Tesseract Worker 初始化 =====================
 async function initWorker(){
     worker = Tesseract.createWorker({
         logger: m => {
@@ -60,13 +56,11 @@ async function initWorker(){
     await worker.load();
     await worker.loadLanguage('eng+chi_tra');
     await worker.initialize('eng+chi_tra');
-    workerReady = true;
+    workerReady=true;
     document.getElementById("status").innerText += " | Tesseract 已初始化";
 }
 
-// ===============================
-// 工具函式
-// ===============================
+// ===================== 工具函式 =====================
 function imgToMat(blob){
     return new Promise(resolve=>{
         let img=new Image();
@@ -79,37 +73,27 @@ function imgToMat(blob){
         img.src=URL.createObjectURL(blob);
     });
 }
-function autoRotateMat(src){
-    let rotated = src.clone();
-    if(src.cols < src.rows){
-        let M = cv.getRotationMatrix2D(new cv.Point(src.cols/2, src.rows/2), 90,1);
-        let dst = new cv.Mat();
-        cv.warpAffine(src,dst,M,new cv.Size(src.rows, src.cols));
-        rotated.delete(); M.delete();
-        rotated = dst;
-    }
-    return rotated;
+function preprocessMat(mat){
+    let gray=new cv.Mat();
+    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(3,3),0);
+    cv.adaptiveThreshold(gray, gray,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,31,15);
+    return gray;
 }
 
-// ===============================
-// OCR 函式
-// ===============================
+// ===================== OCR 函式 =====================
 async function ocrMRZ(mat){
     if(!workerReady) await initWorker();
-    let rotated = autoRotateMat(mat);
-    const mrzY = Math.floor(rotated.rows*0.75);
-    const mrzH = rotated.rows - mrzY;
-    let mrzMat = rotated.roi(new cv.Rect(0,mrzY,rotated.cols,mrzH));
-    cv.cvtColor(mrzMat, mrzMat, cv.COLOR_RGBA2GRAY);
-    let scale = 600 / mrzMat.cols;
-    cv.resize(mrzMat, mrzMat, new cv.Size(600, Math.floor(mrzMat.rows*scale)));
-    cv.threshold(mrzMat,mrzMat,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+    let gray=preprocessMat(mat);
+    const mrzY=Math.floor(gray.rows*0.75);
+    const mrzH=gray.rows-mrzY;
+    let roi=gray.roi(new cv.Rect(0,mrzY,gray.cols,mrzH));
     let canvas=document.createElement("canvas");
-    cv.imshow(canvas,mrzMat);
+    cv.imshow(canvas,roi);
     let blob=await new Promise(r=>canvas.toBlob(r,"image/png"));
     let data=null;
     try{
-        const { data:{text} } = await worker.recognize(blob,{tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<'} );
+        const {data:{text}}=await worker.recognize(blob,{tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<'});
         let clean=text.replace(/[^A-Z0-9<]/g,'');
         document.getElementById("ocrPreview").innerText=clean;
         try{
@@ -119,16 +103,13 @@ async function ocrMRZ(mat){
             }
         }catch(e){data=null;}
     }catch(e){data=null;}
-    rotated.delete(); mrzMat.delete();
+    roi.delete(); gray.delete();
     return data;
 }
 
 async function ocrTaiwanPermit(mat){
     if(!workerReady) await initWorker();
-    let rotated = autoRotateMat(mat);
-    let gray = new cv.Mat();
-    cv.cvtColor(rotated,gray,cv.COLOR_RGBA2GRAY);
-    cv.threshold(gray,gray,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+    let gray=preprocessMat(mat);
     function roi(r){ return gray.roi(new cv.Rect(Math.floor(r.x*gray.cols),Math.floor(r.y*gray.rows),Math.floor(r.w*gray.cols),Math.floor(r.h*gray.rows))); }
     const nameROI=roi({x:0.05,y:0.10,w:0.90,h:0.12});
     const birthROI=roi({x:0.05,y:0.25,w:0.55,h:0.08});
@@ -137,37 +118,32 @@ async function ocrTaiwanPermit(mat){
         let c=document.createElement("canvas"); c.width=roi.cols; c.height=roi.rows;
         cv.imshow(c,roi);
         let blob=await new Promise(r=>c.toBlob(r,"image/png"));
-        const {data:{text}} = await worker.recognize(blob);
+        const {data:{text}}=await worker.recognize(blob);
         return text.trim();
     }
     let name=await roiToText(nameROI);
     let birthday=await roiToText(birthROI);
     let expiry=await roiToText(expROI);
-    nameROI.delete(); birthROI.delete(); expROI.delete(); gray.delete(); rotated.delete();
+    nameROI.delete(); birthROI.delete(); expROI.delete(); gray.delete();
     return {documentType:"Taiwan Compatriot Permit",name,birthday,expiry};
 }
 
-// ===============================
-// 主流程
-// ===============================
+// ===================== 主流程 =====================
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
+
 async function processImage(file){
-    if(!workerReady) await initWorker();
-    document.getElementById("ocrPreview").innerText="即時 OCR 處理中…";
+    document.getElementById("ocrPreview").innerText="OCR 處理中…";
     let mat=await imgToMat(file);
-    let mrzData=await ocrMRZ(mat);
-    let finalData=null;
-    if(mrzData){finalData=mrzData;}
-    else{finalData=await ocrTaiwanPermit(mat);}
+    let data=await ocrMRZ(mat);
+    if(!data) data=await ocrTaiwanPermit(mat);
     mat.delete();
-    document.getElementById("result").innerText=JSON.stringify(finalData,null,2);
-    await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(finalData)});
+    document.getElementById("result").innerText=JSON.stringify(data,null,2);
+    if(data) await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
 }
 
-// ===============================
-// 上傳 & 相機
-// ===============================
+// ===================== 上傳 & 相機 =====================
 document.getElementById("fileInput").onchange = e => {if(e.target.files.length>0) processImage(e.target.files[0]);};
+
 const cameraBtn=document.getElementById("cameraBtn");
 const camera=document.getElementById("camera");
 const capture=document.getElementById("capture");
@@ -176,18 +152,6 @@ cameraBtn.onclick=async()=>{
     if(cameraBtn.classList.contains("disabled")) return;
     const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
     camera.srcObject=stream; camera.style.display="block"; capture.style.display="block";
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    function updatePreview(){
-        if(camera.videoWidth && camera.videoHeight){
-            canvas.width=camera.videoWidth; canvas.height=camera.videoHeight;
-            ctx.drawImage(camera,0,0);
-            canvas.toBlob(blob => processImage(blob));
-        }
-        requestAnimationFrame(updatePreview);
-    }
-    updatePreview();
 };
 
 capture.onclick=()=>{
@@ -198,6 +162,7 @@ capture.onclick=()=>{
 </script>
 </body>
 </html>
+
 
 
 
