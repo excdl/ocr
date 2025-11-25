@@ -4,8 +4,6 @@
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 辨識</title>
 
-<!-- OpenCV -->
-<script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 <!-- Tesseract OCR -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 <!-- MRZ.js -->
@@ -15,6 +13,7 @@
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
 .container{width:92%;max-width:500px;margin:28px auto;background:white;border-radius:14px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,0.1);}
 button{background:#2979ff;color:white;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-size:16px;width:48%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.15s;}
+button:disabled{opacity:0.5;cursor:not-allowed;}
 button:active{transform:scale(0.96);}
 .upload-box{display:flex;justify-content:space-between;margin-bottom:18px;}
 video{width:100%;display:none;border-radius:12px;margin-top:12px;}
@@ -24,6 +23,20 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 @keyframes spin{to{transform:rotate(360deg);}}
 .loader-text{color:white;margin-top:16px;font-size:18px;}
 </style>
+
+<script>
+let openCVReady=false;
+
+function onOpenCvReady(){
+    openCVReady=true;
+    document.getElementById("status").innerText="OpenCV 載入完成，可開始辨識！";
+    document.getElementById("fileInput").disabled=false;
+    document.getElementById("cameraBtn").disabled=false;
+}
+</script>
+
+<!-- OpenCV.js 必須在 onOpenCvReady 定義後才載入 -->
+<script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 </head>
 <body>
 
@@ -38,9 +51,9 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
   <h2>護照 / 台胞證 OCR 辨識</h2>
 
   <div class="upload-box">
-    <input type="file" id="fileInput" accept="image/*" hidden>
-    <button onclick="document.getElementById('fileInput').click()">📤 上傳圖片</button>
-    <button id="cameraBtn">📷 使用相機</button>
+    <input type="file" id="fileInput" accept="image/*" hidden disabled>
+    <button onclick="document.getElementById('fileInput').click()" id="uploadBtn" disabled>📤 上傳圖片</button>
+    <button id="cameraBtn" disabled>📷 使用相機</button>
   </div>
 
   <video id="camera" autoplay playsinline></video>
@@ -52,14 +65,8 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 
 <script>
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbz62oZJQopNZmWMZLiFvIBEj-ktwO8OA_cbMUt2m1KGmedkCcdemcvQTyvIDJPhBYwV/exec"; // <-- 改成你的 GAS Web App URL
-let openCVReady=false;
 const loaderMask=document.getElementById("loaderMask");
 const result=document.getElementById("result");
-
-function onOpenCvReady(){
-    openCVReady=true;
-    document.getElementById("status").innerText="OpenCV 載入完成，可開始辨識！";
-}
 
 function showLoader(){loaderMask.style.display="flex";}
 function hideLoader(){loaderMask.style.display="none";}
@@ -141,7 +148,7 @@ function extractNamesAndIDs(text){
   return {englishName,id};
 }
 
-/* 主流程（自動判斷 + MRZ OCR 重試） */
+/* 主流程 */
 async function processImage(file){
   showLoader(); 
   document.getElementById("status").innerText="影像處理中…";
@@ -152,7 +159,6 @@ async function processImage(file){
   const mrzBlob=await extractMRZ(processed);
   let mrz=await recognizeMRZ(mrzBlob);
 
-  // MRZ 辨識失敗 → 用 OCR 重試
   if(!mrz){
     document.getElementById("status").innerText="MRZ 初步失敗，使用 OCR 重試…";
     const mrzText=await recognizeOCR(mrzBlob);
@@ -165,7 +171,6 @@ async function processImage(file){
   let data={};
 
   if(mrz){
-    // 護照
     document.getElementById("status").innerText="✓ 護照辨識成功";
     data={
       documentType:"Passport",
@@ -178,7 +183,6 @@ async function processImage(file){
     };
     result.innerText=JSON.stringify(data,null,2);
   }else{
-    // 台胞證
     document.getElementById("status").innerText="台胞證 OCR 辨識中…";
     const text=await recognizeOCR(processed);
     const dates=extractTaiwanPermitDates(text);
@@ -202,6 +206,7 @@ async function processImage(file){
 }
 
 /* 上傳 */
+const fileInput=document.getElementById("fileInput");
 fileInput.onchange=e=>{if(e.target.files.length>0)processImage(e.target.files[0]);};
 
 /* 相機 */
@@ -221,6 +226,7 @@ capture.onclick=()=>{
 </script>
 </body>
 </html>
+
 
 
 
