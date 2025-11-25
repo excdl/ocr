@@ -96,7 +96,7 @@ function imgToMat(blob){
 }
 
 // ===============================
-// MRZ OCR with progress & error handling
+// MRZ OCR with progress & error handling (eng 替代 OCRB)
 // ===============================
 async function ocrMRZ(mat){
     setLoaderText("辨識 MRZ…");
@@ -113,8 +113,8 @@ async function ocrMRZ(mat){
             }
         }
     });
-    await worker.loadLanguage('ocrb');
-    await worker.initialize('ocrb');
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
 
     let data=null;
     try{
@@ -179,7 +179,7 @@ async function ocrTaiwanPermit(mat){
 // ===============================
 // 主流程
 // ===============================
-const SCRIPT_URL="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"; // <-- 改成你的 GAS URL
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec"; // <-- 改成你的 GAS URL
 
 async function processImage(file){
     showLoader();
