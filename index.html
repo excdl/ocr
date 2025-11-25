@@ -4,8 +4,11 @@
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 辨識</title>
 
-<script src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.7.0/dist/opencv.js"></script>
+<!-- OpenCV 官方 CDN -->
+<script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
+<!-- Tesseract OCR -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+<!-- MRZ -->
 <script src="https://cdn.jsdelivr.net/npm/mrz@3.0.0/dist/mrz.min.js"></script>
 
 <style>
@@ -48,9 +51,14 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 </div>
 
 <script>
-const SCRIPT_URL="https://script.google.com/macros/s/AKfycbxRw0sVVg_coQBE-JZi2a0WvsEXqCa7lf7u5viiR0qvVpEBWQ8vmCMCbsm5PmFBpLxL/exec";
+const SCRIPT_URL="YOUR_SCRIPT_URL_HERE"; // <-- 改成你的 Google Apps Script URL
 let openCVReady=false;
-cv.onRuntimeInitialized=()=>{openCVReady=true;status.innerText="OpenCV 載入完成，可開始辨識！";}
+
+function onOpenCvReady(){
+    openCVReady=true;
+    document.getElementById("status").innerText="OpenCV 載入完成，可開始辨識！";
+}
+
 function showLoader(){loaderMask.style.display="flex";}
 function hideLoader(){loaderMask.style.display="none";}
 
@@ -62,6 +70,7 @@ async function preprocessImage(blob){
       const c=document.createElement("canvas");
       c.width=img.width;c.height=img.height;
       c.getContext("2d").drawImage(img,0,0);
+      if(!openCVReady){alert("OpenCV 尚未載入"); return;}
       let src=cv.imread(c);
       cv.cvtColor(src,src,cv.COLOR_RGBA2GRAY);
       cv.threshold(src,src,0,255,cv.THRESH_OTSU+cv.THRESH_BINARY);
@@ -129,15 +138,14 @@ function extractNamesAndIDs(text){
 
 /* 主流程 */
 async function processImage(file){
-  if(!openCVReady){alert("OpenCV 尚未載入");return;}
-  showLoader();status.innerText="影像處理中…";
+  showLoader();document.getElementById("status").innerText="影像處理中…";
   const processed=await preprocessImage(file);
-  status.innerText="護照 MRZ 辨識中…";
+  document.getElementById("status").innerText="護照 MRZ 辨識中…";
   const mrzBlob=await extractMRZ(processed);
   const mrz=await recognizeMRZ(mrzBlob);
   let data={};
   if(mrz){
-    status.innerText="✓ 成功辨識護照（MRZ）";
+    document.getElementById("status").innerText="✓ 成功辨識護照（MRZ）";
     data={
       documentType:"Passport",
       name:mrz.fields.surname+" "+mrz.fields.givenNames,
@@ -149,7 +157,7 @@ async function processImage(file){
     };
     result.innerText=JSON.stringify(data,null,2);
   }else{
-    status.innerText="台胞證 OCR 辨識中…";
+    document.getElementById("status").innerText="台胞證 OCR 辨識中…";
     const text=await recognizeOCR(processed);
     const dates=extractTaiwanPermitDates(text);
     const namesIDs=extractNamesAndIDs(text);
@@ -164,9 +172,9 @@ async function processImage(file){
     };
     result.innerText=text+"\n\n"+JSON.stringify(data,null,2);
   }
-  status.innerText="寫入 Google Sheet…";
+  document.getElementById("status").innerText="寫入 Google Sheet…";
   await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
-  status.innerText="🎉 已寫入 Google Sheet！";
+  document.getElementById("status").innerText="🎉 已寫入 Google Sheet！";
   hideLoader();
 }
 
