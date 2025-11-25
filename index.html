@@ -14,55 +14,20 @@
 <script src="https://cdn.jsdelivr.net/npm/mrz@3.0.0/dist/mrz.min.js"></script>
 
 <style>
-body {
-  font-family: "Arial", sans-serif;
-  background: #f2f2f2;
-}
-
+body { font-family: "Arial"; background: #f2f2f2; }
 .container {
-  width: 90%;
-  max-width: 480px;
-  margin: 20px auto;
-  background: white;
-  padding: 20px;
-  border-radius: 12px;
+  width: 90%; max-width: 480px; margin: 20px auto;
+  padding: 20px; background: white; border-radius: 10px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.15);
 }
-
-.upload-box {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 20px;
-}
-
+.upload-box { display: flex; justify-content: space-between; }
 button {
-  background: #007bff;
-  color: white;
-  border: none;
-  padding: 12px;
-  border-radius: 6px;
-  cursor: pointer;
+  background: #007bff; color: white; border: none;
+  padding: 10px; border-radius: 6px; cursor: pointer;
 }
-
-button:hover {
-  background: #0056c1;
-}
-
-video {
-  width: 100%;
-  border-radius: 8px;
-  margin: 10px 0;
-  display: none;
-}
-
-pre {
-  background: #222;
-  color: #0f0;
-  padding: 10px;
-  border-radius: 8px;
-  height: 180px;
-  overflow-y: auto;
-}
+button:hover { background: #0056c1; }
+video { width: 100%; display: none; margin-top: 10px; border-radius: 10px; }
+pre { background:#222; color:#0f0; padding:10px; border-radius:6px; height:160px;overflow-y:auto; }
 </style>
 
 </head>
@@ -74,7 +39,6 @@ pre {
     <div class="upload-box">
         <input type="file" id="fileInput" accept="image/*" hidden>
         <button onclick="document.getElementById('fileInput').click()">📤 上傳圖片</button>
-
         <button id="cameraBtn">📷 使用相機</button>
     </div>
 
@@ -86,12 +50,31 @@ pre {
 </div>
 
 <script>
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxRw0sVVg_coQBE-JZi2a0WvsEXqCa7lf7u5viiR0qvVpEBWQ8vmCMCbsm5PmFBpLxL/exec";  // <<< 你要填這個！
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxRw0sVVg_coQBE-JZi2a0WvsEXqCa7lf7u5viiR0qvVpEBWQ8vmCMCbsm5PmFBpLxL/exec";   // ⬅ 修改這裡
 
-// ===============================
-// 影像前處理 (OpenCV)
-// ===============================
+let openCVReady = false;
+
+// ==========================
+// 等待 OpenCV 載入
+// ==========================
+document.getElementById("status").innerText = "正在載入 OpenCV，請稍候…";
+
+window.cv = window.cv || {};
+
+cv.onRuntimeInitialized = () => {
+    openCVReady = true;
+    document.getElementById("status").innerText = "OpenCV 載入完成，可開始上傳圖片！";
+};
+
+// ==========================
+// 影像前處理
+// ==========================
 async function preprocessImage(blob) {
+    if (!openCVReady) {
+        alert("OpenCV 尚未載入完成！");
+        return null;
+    }
+
     return new Promise(resolve => {
         const img = new Image();
         img.onload = () => {
@@ -101,105 +84,59 @@ async function preprocessImage(blob) {
             const ctx = c.getContext("2d");
             ctx.drawImage(img, 0, 0);
 
-            const src = cv.imread(c);
+            try {
+                const src = cv.imread(c);
 
-            cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY);
-            cv.threshold(src, src, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-            cv.GaussianBlur(src, src, new cv.Size(3,3), 0);
+                cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY);
+                cv.threshold(src, src, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+                cv.GaussianBlur(src, src, new cv.Size(3,3), 0);
 
-            const kernel = cv.Mat.ones(3, 3, cv.CV_32F);
-            for (let i = 0; i < 9; i++) kernel.data32F[i] = -1;
-            kernel.data32F[4] = 12; 
-            cv.filter2D(src, src, cv.CV_8U, kernel);
+                cv.imshow(c, src);
+                src.delete();
 
-            cv.imshow(c, src);
-
-            src.delete();
-            kernel.delete();
-
-            c.toBlob(resolve, "image/jpeg");
+                c.toBlob(resolve, "image/jpeg");
+            } catch (err) {
+                alert("OpenCV 影像處理錯誤：" + err);
+                resolve(blob);
+            }
         };
         img.src = URL.createObjectURL(blob);
     });
 }
 
-// ===============================
-// 自動裁切 MRZ 區域
-// ===============================
-async function extractMRZ(blob) {
-    return new Promise(resolve => {
-        const img = new Image();
-        img.onload = () => {
-            const h = img.height;
-            const mrzY = h * 0.80;
-            const mrzH = h * 0.20;
-
-            const c = document.createElement("canvas");
-            c.width = img.width;
-            c.height = mrzH;
-
-            c.getContext("2d").drawImage(
-                img,
-                0, mrzY, img.width, mrzH,
-                0, 0, img.width, mrzH
-            );
-
-            c.toBlob(resolve, "image/jpeg");
-        };
-        img.src = URL.createObjectURL(blob);
-    });
-}
-
-// ===============================
-// 專用 MRZ 辨識
-// ===============================
-async function recognizeMRZ(blob) {
-    return new Promise(resolve => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            let text = MRZ.parse(reader.result);
-            resolve(text.valid ? text : null);
-        };
-        reader.readAsText(blob);
-    });
-}
-
-// ===============================
-// Tesseract 辨識 (台胞證)
-// ===============================
-async function recognizeOCR(blob) {
-    const { data: { text } } = await Tesseract.recognize(blob, "eng");
-    return text;
-}
-
-// ===============================
-// 主流程
-// ===============================
+// ==========================
+// OCR 主流程
+// ==========================
 async function processImage(file) {
+    if (!openCVReady) {
+        alert("OpenCV 尚未載入完成！");
+        return;
+    }
+
     status.innerText = "🛠 正在強化影像...";
     const processed = await preprocessImage(file);
 
     status.innerText = "🔎 嘗試辨識 MRZ(護照)...";
+
+    // → 裁切 MRZ
     const mrzBlob = await extractMRZ(processed);
-    const mrzData = await recognizeMRZ(mrzBlob);
+    const mrz = await recognizeMRZ(mrzBlob);
 
     let data;
 
-    // --- 護照 ---
-    if (mrzData) {
-        status.innerText = "📘 成功辨識護照！";
+    if (mrz) {
+        status.innerText = "📘 成功辨識護照 MRZ！";
 
         data = {
             documentType: "Passport",
-            name: mrzData.fields.surname + " " + mrzData.fields.givenNames,
-            number: mrzData.fields.documentNumber,
-            nationality: mrzData.fields.nationality,
-            birthday: mrzData.fields.dateOfBirth
+            name: mrz.fields.surname + " " + mrz.fields.givenNames,
+            number: mrz.fields.documentNumber,
+            nationality: mrz.fields.nationality,
+            birthday: mrz.fields.dateOfBirth
         };
 
     } else {
-        // --- 台胞證 ---
-        status.innerText = "📄 無 MRZ，辨識台胞證...";
+        status.innerText = "📄 辨識台胞證...";
         const text = await recognizeOCR(processed);
 
         result.innerText = text;
@@ -213,27 +150,32 @@ async function processImage(file) {
         };
     }
 
-    // 送出資料
-    status.innerText = "📤 正在寫入 Google Sheet...";
+    status.innerText = "📤 正在寫入 Google Sheet…";
+
     await fetch(SCRIPT_URL, {
         method: "POST",
         body: JSON.stringify(data)
     });
 
-    status.innerText = "🎉 完成！資料已成功寫入 Google Sheet";
+    status.innerText = "🎉 已成功寫入 Google Sheet！";
 }
 
-// ===============================
-// 觸發器：上傳圖片
-// ===============================
-fileInput.onchange = e => processImage(e.target.files[0]);
+// ==========================
+// 監聽上傳圖片
+// ==========================
+fileInput.onchange = e => {
+    if (e.target.files.length > 0) {
+        processImage(e.target.files[0]);
+    }
+};
 
-// ===============================
-// 觸發器：開啟相機
-// ===============================
+// ==========================
+// 相機功能
+// ==========================
 const cameraBtn = document.getElementById("cameraBtn");
 const camera = document.getElementById("camera");
 const capture = document.getElementById("capture");
+
 let stream;
 
 cameraBtn.onclick = async () => {
@@ -244,13 +186,61 @@ cameraBtn.onclick = async () => {
 };
 
 capture.onclick = () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = camera.videoWidth;
-    canvas.height = camera.videoHeight;
-    canvas.getContext("2d").drawImage(camera, 0, 0);
-    canvas.toBlob(blob => processImage(blob));
+    const c = document.createElement("canvas");
+    c.width = camera.videoWidth;
+    c.height = camera.videoHeight;
+    c.getContext("2d").drawImage(camera, 0, 0);
+    c.toBlob(blob => processImage(blob));
 };
+
+// ==========================
+// 工具：裁切 MRZ 區域
+// ==========================
+async function extractMRZ(blob) {
+    return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => {
+            const h = img.height;
+            const mrzY = h * 0.80;
+            const mrzH = h * 0.20;
+
+            const c = document.createElement("canvas");
+            c.width = img.width;
+            c.height = mrzH;
+            c.getContext("2d").drawImage(img, 0, mrzY, img.width, mrzH, 0, 0, img.width, mrzH);
+
+            c.toBlob(resolve, "image/jpeg");
+        };
+        img.src = URL.createObjectURL(blob);
+    });
+}
+
+// ==========================
+// 工具：MRZ 專用辨識
+// ==========================
+async function recognizeMRZ(blob) {
+    return new Promise(resolve => {
+        const fr = new FileReader();
+        fr.onload = () => {
+            const parsed = MRZ.parse(fr.result);
+            resolve(parsed.valid ? parsed : null);
+        };
+        fr.readAsText(blob);
+    });
+}
+
+// ==========================
+// 工具：Tesseract 辨識
+// ==========================
+async function recognizeOCR(blob) {
+    const { data: { text } } = await Tesseract.recognize(blob, "eng");
+    return text;
+}
+
 </script>
 
 </body>
 </html>
+
+
+
