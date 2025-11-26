@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR App</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
-<script async src="https://docs.opencv.org/4.9.0/opencv.js"></script>
+<script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
 <style>
 body{
   margin:0;
@@ -92,20 +92,25 @@ function formatBirthday(str){
     return str;
 }
 
-// ===================== OpenCV + Tesseract 初始化 =====================
-cv['onRuntimeInitialized']=async()=>{
-    status.innerText="OpenCV 載入完成，初始化 Tesseract…";
-    worker = Tesseract.createWorker({
-        logger:m=>{
-            if(m.status==='recognizing text' && m.progress) ocrPreview.innerText=m.text||'';
-        }
-    });
-    await worker.load();
-    await worker.loadLanguage('eng+chi_tra+chi_sim');
-    await worker.initialize('eng+chi_tra+chi_sim');
-    workerReady=true;
-    status.innerText="OpenCV + Tesseract 初始化完成 ✅";
-};
+// ===================== OpenCV 初始化 =====================
+if(typeof cv==='undefined'){
+    status.innerText="OpenCV 載入失敗，請檢查網路或版本";
+} else {
+    cv['onRuntimeInitialized']=async()=>{
+        status.innerText="OpenCV 載入完成，初始化 Tesseract…";
+
+        worker = Tesseract.createWorker({
+            logger:m=>{
+                if(m.status==='recognizing text' && m.progress) ocrPreview.innerText=m.text||'';
+            }
+        });
+        await worker.load();
+        await worker.loadLanguage('eng+chi_tra+chi_sim');
+        await worker.initialize('eng+chi_tra+chi_sim');
+        workerReady=true;
+        status.innerText="OpenCV + Tesseract 初始化完成 ✅";
+    };
+}
 
 // ===================== Google Sheet =====================
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
