@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Tesseract 測試</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
 </head>
 <body>
 <h2>Tesseract 初始化測試</h2>
@@ -17,8 +17,8 @@ window.onload = async () => {
     }
 
     const worker = Tesseract.createWorker({
-        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/worker.min.js',
-        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.1.0/tesseract-core.wasm.js',
+        workerPath: 'https://unpkg.com/tesseract.js@5.3.1/dist/worker.min.js',
+        corePath: 'https://unpkg.com/tesseract.js-core@4.1.0/tesseract-core.wasm.js',
         langPath: 'https://tessdata.projectnaptha.com/4.0.0_best/',
         logger: m => console.log(m)
     });
