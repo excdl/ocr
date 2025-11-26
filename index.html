@@ -15,7 +15,7 @@ h2{text-align:center;margin-bottom:20px;color:#333;}
 .upload-box{display:flex;gap:12px;margin-bottom:18px;}
 button,label{background:#2979ff;color:white;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-size:16px;width:100%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.2s;text-align:center;}
 button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
-video{width:100%;display:none;border-radius:12px;margin-top:12px;}
+video, #uploadedImage{width:100%;border-radius:12px;margin-top:12px;display:none;}
 canvas#ocrCanvas{width:100%;border-radius:12px;margin-top:12px;}
 pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;overflow-y:auto;margin-top:12px;white-space:pre-wrap;}
 #qrCode{text-align:center;margin-top:12px;}
@@ -31,6 +31,7 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;over
     <button id="cameraBtn" class="disabled">📷 使用相機</button>
 </div>
 <video id="camera" autoplay playsinline></video>
+<img id="uploadedImage">
 <button id="capture" style="display:none;margin-top:12px;">📸 拍照</button>
 <canvas id="ocrCanvas"></canvas>
 <p id="status">正在載入 OpenCV…</p>
@@ -68,7 +69,16 @@ cv['onRuntimeInitialized']=async()=>{
 // ===== 圖像處理 =====
 function imgToMat(blob){return new Promise(resolve=>{let img=new Image();img.onload=()=>{let c=document.createElement("canvas");c.width=img.width;c.height=img.height;c.getContext("2d").drawImage(img,0,0);resolve(cv.imread(c));};img.src=URL.createObjectURL(blob);});}
 function enhanceMat(mat){let gray=new cv.Mat();cv.cvtColor(mat,gray,cv.COLOR_RGBA2GRAY);cv.GaussianBlur(gray,gray,new cv.Size(3,3),0);cv.adaptiveThreshold(gray,gray,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,31,15);return gray;}
-function isBlur(mat){let lap=new cv.Mat();cv.Laplacian(mat,lap,cv.CV_64F);let mean=cv.meanStdDev(lap);lap.delete();return mean[1][0]<20;}
+function isBlur(mat){
+    let lap = new cv.Mat();
+    cv.Laplacian(mat, lap, cv.CV_64F);
+    let mean = new cv.Mat();
+    let stddev = new cv.Mat();
+    cv.meanStdDev(lap, mean, stddev);
+    let stdVal = stddev.data64F[0];
+    lap.delete(); mean.delete(); stddev.delete();
+    return stdVal < 20;
+}
 
 // ===== 即時 OCR 預覽 =====
 let videoStream, animationFrame;
@@ -105,12 +115,23 @@ async function livePreview(){
 function generateQRCode(data){let qrDiv=document.getElementById("qrCode");qrDiv.innerHTML="";let qrText=`姓名:${data.name||data.cname||''}\n生日:${data.birthday}\n有效期:${data.expiry}`;QRCode.toCanvas(qrText,{width:180},function(err,canvas){if(!err)qrDiv.appendChild(canvas);});}
 
 // ===== 上傳 & 相機 =====
-document.getElementById("fileInput").onchange=e=>{if(e.target.files.length>0)processImage(e.target.files[0]);};
+const uploadedImage=document.getElementById("uploadedImage");
+document.getElementById("fileInput").onchange=e=>{
+    if(e.target.files.length>0){
+        let file=e.target.files[0];
+        uploadedImage.src=URL.createObjectURL(file);
+        uploadedImage.style.display="block";
+        camera.style.display="none";
+        capture.style.display="none";
+        processImage(file);
+    }
+};
 const cameraBtn=document.getElementById("cameraBtn");const capture=document.getElementById("capture");
 cameraBtn.onclick=async()=>{
     if(cameraBtn.classList.contains("disabled"))return;
     videoStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
     camera.srcObject=videoStream; camera.style.display="block"; capture.style.display="block";
+    uploadedImage.style.display="none";
     livePreview();
 };
 capture.onclick=()=>{const c=document.createElement("canvas");c.width=camera.videoWidth;c.height=camera.videoHeight;c.getContext("2d").drawImage(camera,0,0);c.toBlob(blob=>processImage(blob));};
@@ -168,6 +189,7 @@ async function processImage(file){
 </script>
 </body>
 </html>
+
 
 
 
