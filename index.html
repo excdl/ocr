@@ -2,79 +2,46 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR + MRZ + Dashboard</title>
-<script src="https://unpkg.com/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
+<title>護照 / 台胞證 OCR 即時版</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
-<script async src="https://docs.opencv.org/4.9.0/opencv.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:linear-gradient(135deg,#4facfe,#00f2fe);}
 .container{width:95%;max-width:600px;margin:20px auto;background:white;border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,0.15);}
 h1{text-align:center;color:#333;}
-.upload-box{display:flex;gap:10px;margin-bottom:12px;}
+.upload-box, .camera-box{display:flex;gap:10px;margin-bottom:12px;}
 button,label{background:#2979ff;color:white;border:none;padding:10px 14px;border-radius:10px;cursor:pointer;flex:1;text-align:center;}
+button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
 canvas,video{width:100%;border-radius:10px;display:none;margin-top:10px;}
 pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;overflow-y:auto;font-family:monospace;}
-#cardsContainer{margin-top:12px;}
-.card{padding:8px;border:1px solid #ccc;border-radius:8px;margin-bottom:8px;}
 </style>
 </head>
 <body>
 <div class="container">
-<h1>護照 / 台胞證 OCR + MRZ + Dashboard</h1>
+<h1>護照 / 台胞證 OCR 即時版</h1>
 
-<div class="upload-box">
-<input type="file" id="fileInput" accept="image/*" hidden>
-<label for="fileInput">📤 上傳圖片</label>
-<button id="cameraBtn">📷 使用相機</button>
+<div class="camera-box">
+<button id="cameraBtn" disabled class="disabled">📷 請等待 Tesseract 初始化…</button>
+<button id="captureBtn" disabled class="disabled">📸 拍照 OCR</button>
 </div>
 
-<canvas id="previewCanvas"></canvas>
 <video id="camera" autoplay playsinline></video>
-<button id="capture" style="display:none;">📸 拍照</button>
-
+<canvas id="previewCanvas"></canvas>
 <pre id="ocrPreview">OCR 預覽</pre>
-<p id="status">OpenCV / Tesseract 未載入 ❌</p>
-
-<h3>Dashboard</h3>
-<button id="exportCsv">匯出 CSV</button>
-<div id="cardsContainer"></div>
+<p id="status">Tesseract 尚未初始化 ❌</p>
 </div>
 
 <script>
-const SCRIPT_URL="YOUR_GOOGLE_SCRIPT_URL"; // <-- 改成你的 Google Apps Script URL
-let historyData=[];
+const SCRIPT_URL="YOUR_GOOGLE_SCRIPT_URL"; // <-- 換成你的 Google Apps Script URL
 let worker, workerReady=false;
-let cvReady=false;
 const status=document.getElementById("status");
 const ocrPreview=document.getElementById("ocrPreview");
+const previewCanvas=document.getElementById("previewCanvas");
+const cameraBtn=document.getElementById("cameraBtn");
+const captureBtn=document.getElementById("captureBtn");
+const camera=document.getElementById("camera");
 
-async function initTesseract(){
-    try{
-        console.log("建立 Tesseract worker");
-        worker=Tesseract.createWorker({
-            logger:m=>{ if(m.status==='recognizing text') ocrPreview.innerText=m.text||''; }
-        });
-        await worker.load();
-        console.log("Tesseract load 完成");
-        await worker.loadLanguage('eng+chi_tra+chi_sim');
-        console.log("Tesseract language load 完成");
-        await worker.initialize('eng+chi_tra+chi_sim');
-        console.log("Tesseract initialize 完成");
-        workerReady=true;
-        status.innerText=cvReady?"OpenCV + Tesseract 初始化完成 ✅":"等待 OpenCV 初始化…";
-    }catch(e){ console.error("Tesseract 初始化失敗:", e); status.innerText="Tesseract 初始化失敗 ❌"; }
-}
-
-if(typeof cv==='undefined'){
-    status.innerText="OpenCV 載入中…";
-}else{
-    cv['onRuntimeInitialized']=()=>{
-        cvReady=true;
-        status.innerText=workerReady?"OpenCV + Tesseract 初始化完成 ✅":"OpenCV 載入完成，初始化 Tesseract…";
-        initTesseract();
-    };
-}
-
+// 生日格式化
 function formatBirthday(str){
     let clean=str.replace(/[^\d]/g,'');
     if(clean.length===6) return '19'+clean.slice(0,2)+'/'+clean.slice(2,4)+'/'+clean.slice(4,6);
@@ -82,69 +49,27 @@ function formatBirthday(str){
     return str;
 }
 
-function extractMRZRegion(canvas){
-    try{
-        let src=cv.imread(canvas);
-        let gray=new cv.Mat();
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        let clahe=new cv.CLAHE(2.0,new cv.Size(8,8));
-        let enhanced=new cv.Mat();
-        clahe.apply(gray,enhanced);
-
-        let gamma=1.2;
-        let lookUp=new cv.Mat(1,256,cv.CV_8U);
-        for(let i=0;i<256;i++) lookUp.ucharPtr(0,i)[0]=Math.min(255, Math.pow(i/255.0,1/gamma)*255);
-        let gammaCorrected=new cv.Mat();
-        cv.LUT(enhanced, lookUp, gammaCorrected);
-
-        let blur=new cv.Mat();
-        cv.GaussianBlur(gammaCorrected, blur, new cv.Size(3,3),0);
-        let thresh=new cv.Mat();
-        cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
-
-        let contours=new cv.MatVector();
-        let hierarchy=new cv.Mat();
-        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-        let mrzRect=null, mrzContour=null;
-        for(let i=0;i<contours.size();i++){
-            let cnt=contours.get(i);
-            let rect=cv.boundingRect(cnt);
-            if(rect.width>rect.height*5 && rect.y>src.rows*0.5){
-                if(!mrzRect || rect.y>mrzRect.y){ mrzRect=rect; mrzContour=cnt; }
-                else cnt.delete();
-            }else cnt.delete();
-        }
-
-        if(mrzRect && mrzContour){
-            let rotatedRect=cv.minAreaRect(mrzContour);
-            let angle=rotatedRect.angle;
-            if(rotatedRect.size.width<rotatedRect.size.height) angle+=90;
-            let center=new cv.Point(src.cols/2,src.rows/2);
-            let M=cv.getRotationMatrix2D(center, angle, 1);
-            let rotated=new cv.Mat();
-            cv.warpAffine(src, rotated, M, new cv.Size(src.cols, src.rows));
-
-            let mrzCanvas=document.createElement('canvas');
-            mrzCanvas.width=mrzRect.width;
-            mrzCanvas.height=mrzRect.height;
-            mrzCanvas.getContext('2d').drawImage(rotated, mrzRect.x, mrzRect.y, mrzRect.width, mrzRect.height, 0,0,mrzRect.width,mrzRect.height);
-
-            src.delete(); gray.delete(); enhanced.delete(); gammaCorrected.delete();
-            blur.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); rotated.delete(); clahe.delete(); lookUp.delete();
-            return mrzCanvas;
-        }else{
-            src.delete(); gray.delete(); enhanced.delete(); gammaCorrected.delete();
-            blur.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); clahe.delete(); lookUp.delete();
-            return canvas;
-        }
-    }catch(e){ console.error(e); return canvas; }
+// 初始化 Tesseract
+async function initTesseract(){
+    status.innerText="Tesseract 初始化中…";
+    worker=Tesseract.createWorker({
+        logger:m=>{ if(m.status==='recognizing text') ocrPreview.innerText=m.text||''; }
+    });
+    await worker.load();
+    await worker.loadLanguage('eng+chi_tra+chi_sim');
+    await worker.initialize('eng+chi_tra+chi_sim');
+    workerReady=true;
+    status.innerText="Tesseract 初始化完成 ✅";
+    // 啟用按鈕
+    cameraBtn.disabled=false; cameraBtn.classList.remove('disabled');
+    captureBtn.disabled=false; captureBtn.classList.remove('disabled');
 }
+initTesseract();
 
+// OCR 處理
 async function processCanvas(canvas){
-    if(!workerReady){ status.innerText="Tesseract 尚未就緒 ❌"; return; }
-    const mrzCanvas=extractMRZRegion(canvas);
-    const { data:{ text } }=await worker.recognize(mrzCanvas);
+    if(!workerReady){ alert("Tesseract 尚未就緒"); return; }
+    const { data:{ text } } = await worker.recognize(canvas);
     ocrPreview.innerText=text.trim().slice(0,300);
 
     let result={raw:text};
@@ -168,73 +93,40 @@ async function processCanvas(canvas){
         }
     }catch(e){ result.documentType="Unknown"; }
 
-    fetch(SCRIPT_URL,{method:'POST',body:JSON.stringify(result),headers:{'Content-Type':'application/json'}})
-    .then(res=>console.log(res.status));
-
-    historyData.unshift(result);
-    loadDashboard();
+    // 送 Google Sheet
+    fetch(SCRIPT_URL,{
+        method:'POST',
+        body:JSON.stringify(result),
+        headers:{'Content-Type':'application/json'}
+    }).then(res=>console.log(res.status));
 }
 
-function loadDashboard(){
-    const container=document.getElementById("cardsContainer");
-    container.innerHTML='';
-    historyData.forEach(item=>{
-        const div=document.createElement('div');
-        div.className='card';
-        div.innerText=JSON.stringify(item,null,2);
-        container.appendChild(div);
-    });
-}
-document.getElementById("exportCsv").onclick=()=>{
-    const csv=Papa.unparse(historyData);
-    const blob=new Blob([csv],{type:"text/csv"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download="ocr_history.csv"; a.click();
-    URL.revokeObjectURL(url);
-}
-
-const fileInput=document.getElementById("fileInput");
-fileInput.onchange=e=>{
-    if(e.target.files.length>0){
-        const img=new Image();
-        img.onload=()=>{ 
-            const canvas=document.getElementById("previewCanvas");
-            canvas.width=img.width; canvas.height=img.height;
-            canvas.getContext('2d').drawImage(img,0,0);
-            canvas.style.display='block';
-            processCanvas(canvas);
-        };
-        img.src=URL.createObjectURL(e.target.files[0]);
-    }
-};
-
-const camera=document.getElementById("camera");
-const capture=document.getElementById("capture");
-let liveOCRInterval=null;
-
-document.getElementById("cameraBtn").onclick=async()=>{
+// 打開相機
+cameraBtn.onclick=async()=>{
     try{
         const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
         camera.srcObject=stream;
         camera.style.display='block';
-        capture.style.display='block';
-        if(liveOCRInterval) clearInterval(liveOCRInterval);
-        liveOCRInterval=setInterval(async()=>{
-            const canvas=document.getElementById("previewCanvas");
-            canvas.width=camera.videoWidth; canvas.height=camera.videoHeight;
-            canvas.getContext('2d').drawImage(camera,0,0);
-            await processCanvas(canvas);
-        },1000);
-    }catch(e){ console.error(e); status.innerText="無法開啟相機 ❌"; }
+        previewCanvas.style.display='block';
+    }catch(e){
+        alert("無法開啟相機 ❌");
+        console.error(e);
+    }
 };
 
-capture.onclick=()=>{
-    if(liveOCRInterval){ clearInterval(liveOCRInterval); liveOCRInterval=null; }
+// 拍照 OCR
+captureBtn.onclick=()=>{
+    if(!workerReady){ alert("Tesseract 尚未就緒"); return; }
+    const ctx=previewCanvas.getContext('2d');
+    previewCanvas.width=camera.videoWidth;
+    previewCanvas.height=camera.videoHeight;
+    ctx.drawImage(camera,0,0);
+    processCanvas(previewCanvas);
 };
 </script>
 </body>
 </html>
+
 
 
 
