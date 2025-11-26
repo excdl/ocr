@@ -2,32 +2,103 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>Tesseract 測試</title>
-<script src="https://unpkg.com/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
+<title>護照 / 台胞證 OCR (OCR.Space API)</title>
+<style>
+body{font-family:Arial, sans-serif;background:#f0f0f0;padding:20px;}
+.container{max-width:480px;margin:auto;background:white;padding:20px;border-radius:12px;box-shadow:0 0 12px rgba(0,0,0,0.1);}
+button,input{padding:10px 14px;margin:5px 0;border-radius:8px;border:1px solid #ccc;cursor:pointer;}
+canvas{display:none;}
+pre{background:#222;color:#0f0;padding:10px;border-radius:8px;overflow:auto;}
+</style>
 </head>
 <body>
-<h2>Tesseract 初始化測試</h2>
-<pre id="status">狀態：尚未初始化</pre>
+<div class="container">
+<h2>護照 / 台胞證 OCR</h2>
+<input type="file" id="fileInput" accept="image/*">
+<button id="cameraBtn">使用相機拍照</button>
+<canvas id="canvas"></canvas>
+<pre id="status">狀態: 等待操作</pre>
+<pre id="result">辨識結果將顯示於此</pre>
+</div>
+
 <script>
-window.onload = async () => {
-    const status = document.getElementById("status");
-    if(typeof Tesseract === 'undefined') {
-        status.innerText = "Tesseract 未載入 ❌";
-        return;
+// API Key
+const OCR_API_KEY = 'YOUR_API_KEY'; // <-- 換成你的 OCR.Space API Key
+
+const fileInput = document.getElementById("fileInput");
+const cameraBtn = document.getElementById("cameraBtn");
+const canvas = document.getElementById("canvas");
+const status = document.getElementById("status");
+const resultPre = document.getElementById("result");
+
+// 將 File / Image 轉 Canvas
+function imageToCanvas(img){
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img,0,0);
+    return canvas;
+}
+
+// 呼叫 OCR.Space API
+async function doOCR(canvas){
+    status.innerText = "辨識中...";
+    const blob = await new Promise(r=>canvas.toBlob(r,'image/png'));
+    const formData = new FormData();
+    formData.append("apikey", OCR_API_KEY);
+    formData.append("language","eng,chs,cht"); // 英文+繁中+簡中
+    formData.append("isOverlayRequired","false");
+    formData.append("file", blob);
+
+    try{
+        const res = await fetch("https://api.ocr.space/parse/image",{
+            method:"POST",
+            body:formData
+        });
+        const data = await res.json();
+        if(data.ParsedResults && data.ParsedResults.length>0){
+            const text = data.ParsedResults[0].ParsedText;
+            resultPre.innerText = text;
+        }else{
+            resultPre.innerText = "OCR 失敗，請檢查圖片";
+        }
+        status.innerText = "辨識完成 ✅";
+    }catch(e){
+        status.innerText = "OCR 失敗 ❌";
+        console.error(e);
     }
+}
 
-    const worker = Tesseract.createWorker({
-        workerPath: 'https://unpkg.com/tesseract.js@5.3.1/dist/worker.min.js',
-        corePath: 'https://unpkg.com/tesseract.js-core@4.1.0/tesseract-core.wasm.js',
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0_best/',
-        logger: m => console.log(m)
-    });
+// 上傳圖片
+fileInput.onchange = e => {
+    if(e.target.files.length===0) return;
+    const img = new Image();
+    img.onload = async ()=> {
+        imageToCanvas(img);
+        await doOCR(canvas);
+    };
+    img.src = URL.createObjectURL(e.target.files[0]);
+};
 
-    status.innerText = "載入中…";
-    await worker.load();
-    await worker.loadLanguage('eng+chi_tra+chi_sim');
-    await worker.initialize('eng+chi_tra+chi_sim');
-    status.innerText = "Tesseract 初始化完成 ✅";
+// 相機拍照
+cameraBtn.onclick = async ()=>{
+    const video = document.createElement("video");
+    try{
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+        video.srcObject = stream;
+        video.play();
+        status.innerText = "對準護照或台胞證，等待 3 秒自動拍照...";
+        await new Promise(r=>setTimeout(r,3000));
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video,0,0);
+        stream.getTracks().forEach(t=>t.stop());
+        await doOCR(canvas);
+    }catch(e){
+        status.innerText = "無法開啟相機 ❌";
+        console.error(e);
+    }
 };
 </script>
 </body>
