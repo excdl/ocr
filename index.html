@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR (OCR.Space API)</title>
+<title>護照 / 台胞證 OCR MRZ</title>
 <style>
 body{font-family:Arial, sans-serif;background:#f0f0f0;padding:20px;}
 .container{max-width:480px;margin:auto;background:white;padding:20px;border-radius:12px;box-shadow:0 0 12px rgba(0,0,0,0.1);}
@@ -13,7 +13,7 @@ pre{background:#222;color:#0f0;padding:10px;border-radius:8px;overflow:auto;}
 </head>
 <body>
 <div class="container">
-<h2>護照 / 台胞證 OCR</h2>
+<h2>護照 / 台胞證 OCR MRZ</h2>
 <input type="file" id="fileInput" accept="image/*">
 <button id="cameraBtn">使用相機拍照</button>
 <canvas id="canvas"></canvas>
@@ -22,8 +22,8 @@ pre{background:#222;color:#0f0;padding:10px;border-radius:8px;overflow:auto;}
 </div>
 
 <script>
-// API Key
-const OCR_API_KEY = 'YOUR_API_KEY'; // <-- 換成你的 OCR.Space API Key
+// 🔑 這裡填入你從 OCR.Space 申請到的 API Key
+const OCR_API_KEY = 'K82066068388957';
 
 const fileInput = document.getElementById("fileInput");
 const cameraBtn = document.getElementById("cameraBtn");
@@ -31,22 +31,26 @@ const canvas = document.getElementById("canvas");
 const status = document.getElementById("status");
 const resultPre = document.getElementById("result");
 
-// 將 File / Image 轉 Canvas
-function imageToCanvas(img){
-    canvas.width = img.width;
-    canvas.height = img.height;
+// 將圖片裁切成 MRZ 底部 1/4 區域並增強對比
+function cropMRZ(img){
+    const w = img.width;
+    const h = img.height;
+    const mrzHeight = h * 0.25; // MRZ 高度約1/4
+    canvas.width = w;
+    canvas.height = mrzHeight;
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(img,0,0);
+    ctx.filter = "contrast(150%) grayscale()"; // 增強對比
+    ctx.drawImage(img, 0, h - mrzHeight, w, mrzHeight, 0, 0, w, mrzHeight);
     return canvas;
 }
 
-// 呼叫 OCR.Space API
+// 呼叫 OCR.Space API (OCRB 專門辨識 MRZ)
 async function doOCR(canvas){
     status.innerText = "辨識中...";
     const blob = await new Promise(r=>canvas.toBlob(r,'image/png'));
     const formData = new FormData();
     formData.append("apikey", OCR_API_KEY);
-    formData.append("language","eng,chs,cht"); // 英文+繁中+簡中
+    formData.append("language","OCRB"); // 專門 MRZ
     formData.append("isOverlayRequired","false");
     formData.append("file", blob);
 
@@ -56,17 +60,56 @@ async function doOCR(canvas){
             body:formData
         });
         const data = await res.json();
+        console.log(data);
         if(data.ParsedResults && data.ParsedResults.length>0){
-            const text = data.ParsedResults[0].ParsedText;
+            const text = data.ParsedResults[0].ParsedText.replace(/\s/g,'');
             resultPre.innerText = text;
+            status.innerText = "辨識完成 ✅";
+            parseMRZ(text);
         }else{
             resultPre.innerText = "OCR 失敗，請檢查圖片";
+            status.innerText = "OCR 失敗 ❌";
         }
-        status.innerText = "辨識完成 ✅";
     }catch(e){
         status.innerText = "OCR 失敗 ❌";
         console.error(e);
     }
+}
+
+// 簡單 MRZ 解析 (護照、台胞證)
+function parseMRZ(text){
+    if(text.length < 30) return;
+    let result = {};
+    if(text[0]=='P'){ // Passport
+        result.documentType = "Passport";
+        const lines = text.match(/.{1,44}/g); // MRZ 2行44字
+        if(lines && lines.length>=2){
+            result.id = lines[0].substring(5,14).replace(/</g,'');
+            result.nationality = lines[0].substring(10,13);
+            result.name = lines[0].substring(5).split("<<").map(s=>s.replace(/</g,' ')).slice(1).join(" ");
+            result.birthday = lines[1].substring(0,6);
+            result.sex = lines[1].substring(7,8);
+            result.expiry = lines[1].substring(8,14);
+        }
+    }else{ // 其他護照/台胞證
+        result.documentType = "Taiwan Compatriot Permit";
+        result.rawMRZ = text;
+    }
+    // 將生日、到期日轉成 YYYY/MM/DD
+    if(result.birthday) result.birthday = formatDate(result.birthday);
+    if(result.expiry) result.expiry = formatDate(result.expiry);
+    if(result.sex) result.sex = result.sex==='M'?'男':'女';
+    resultPre.innerText += "\n\n解析結果:\n"+JSON.stringify(result,null,2);
+}
+
+// MRZ 生日/到期日轉換 YYYY/MM/DD
+function formatDate(str){
+    if(str.length===6){ // YYMMDD
+        let year = parseInt(str.slice(0,2));
+        year += year>=50?1900:2000;
+        return `${year}/${str.slice(2,4)}/${str.slice(4,6)}`;
+    }
+    return str;
 }
 
 // 上傳圖片
@@ -74,7 +117,7 @@ fileInput.onchange = e => {
     if(e.target.files.length===0) return;
     const img = new Image();
     img.onload = async ()=> {
-        imageToCanvas(img);
+        cropMRZ(img);
         await doOCR(canvas);
     };
     img.src = URL.createObjectURL(e.target.files[0]);
@@ -89,10 +132,7 @@ cameraBtn.onclick = async ()=>{
         video.play();
         status.innerText = "對準護照或台胞證，等待 3 秒自動拍照...";
         await new Promise(r=>setTimeout(r,3000));
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(video,0,0);
+        cropMRZ(video);
         stream.getTracks().forEach(t=>t.stop());
         await doOCR(canvas);
     }catch(e){
