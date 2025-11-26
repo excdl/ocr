@@ -3,192 +3,253 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR App</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
+<script async src="https://docs.opencv.org/4.9.0/opencv.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
-<script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
 <style>
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background: linear-gradient(135deg,#6a11cb,#2575fc);}
-.container{width:95%;max-width:500px;margin:20px auto;background:#fff;border-radius:20px;padding:20px;box-shadow:0 8px 28px rgba(0,0,0,0.2);animation:fadeIn 0.6s ease-out;}
-h2{text-align:center;margin-bottom:20px;color:#333;}
-.upload-box{display:flex;gap:12px;margin-bottom:18px;}
-button,label{background:#2979ff;color:white;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-size:16px;width:100%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.2s;text-align:center;}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:#f5f6fa;}
+.container{width:92%;max-width:500px;margin:28px auto;background:linear-gradient(145deg,#2979ff,#42a5f5);border-radius:14px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,0.1);color:white;animation:fadeIn 0.6s;}
+h2{text-align:center;margin-bottom:20px;}
+.upload-box{display:flex;gap:12px;margin-bottom:0;}
+button,label{background:#fff;color:#2979ff;border:none;padding:12px 16px;border-radius:12px;cursor:pointer;font-size:16px;width:100%;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:.15s;text-align:center;display:inline-block;}
 button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
-video, #uploadedImage{width:100%;border-radius:12px;margin-top:12px;display:none;}
-canvas#ocrCanvas{width:100%;border-radius:12px;margin-top:12px;}
-pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;overflow-y:auto;margin-top:12px;white-space:pre-wrap;}
-#qrCode{text-align:center;margin-top:12px;}
-@keyframes fadeIn{from{opacity:0; transform:translateY(20px);}to{opacity:1; transform:translateY(0);}}
+video{width:100%;border-radius:12px;margin-top:12px;}
+#previewContainer{position:relative;margin-top:12px;display:none;}
+#uploadedImage{width:100%;border-radius:12px;display:block;}
+#ocrCanvas{position:absolute;top:0;left:0;}
+#closePreview{position:absolute;top:8px;right:8px;z-index:10;background:red;color:white;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-weight:bold;}
+pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;overflow-y:auto;margin-top:20px;}
+#ocrPreview{background:#111;color:#0f0;padding:12px;border-radius:10px;height:150px;overflow-y:auto;margin-top:12px;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
 </style>
 </head>
 <body>
+
 <div class="container">
-<h2>護照 / 台胞證 OCR App</h2>
-<div class="upload-box">
+  <h2>護照 / 台胞證 OCR App</h2>
+  <div class="upload-box">
     <input type="file" id="fileInput" accept="image/*" hidden>
     <label id="uploadBtn" class="disabled" for="fileInput">📤 上傳圖片</label>
     <button id="cameraBtn" class="disabled">📷 使用相機</button>
-</div>
-<video id="camera" autoplay playsinline></video>
-<img id="uploadedImage">
-<button id="capture" style="display:none;margin-top:12px;">📸 拍照</button>
-<canvas id="ocrCanvas"></canvas>
-<p id="status">正在載入 OpenCV…</p>
-<pre id="ocrPreview">即時 OCR 預覽區</pre>
-<pre id="result"></pre>
-<div id="qrCode"></div>
+  </div>
+
+  <!-- 預覽 -->
+  <div id="previewContainer">
+    <button id="closePreview">✖</button>
+    <img id="uploadedImage">
+    <canvas id="ocrCanvas"></canvas>
+  </div>
+
+  <video id="camera" autoplay playsinline style="display:none;"></video>
+  <button id="capture" style="display:none;margin-top:12px;">📸 拍照</button>
+
+  <p id="status">正在載入 OpenCV…</p>
+  <pre id="result"></pre>
+  <pre id="ocrPreview">即時 OCR 預覽區</pre>
 </div>
 
 <script>
-// ===== 日期處理 =====
-function normalizeDigits(str){if(!str)return"";return str.replace(/O/g,"0").replace(/o/g,"0").replace(/I/g,"1").replace(/l/g,"1").replace(/S/g,"5").replace(/B/g,"8").replace(/\D/g,"");}
-function isValidDate(y,m,d){let dt=new Date(y,m-1,d);return dt.getFullYear()===y&&dt.getMonth()===m-1&&dt.getDate()===d;}
-function fixDate(raw){raw=normalizeDigits(raw);if(raw.length<6)return raw;let yyyy,mm,dd;if(raw.length>=8){yyyy=parseInt(raw.slice(0,4));mm=parseInt(raw.slice(4,6));dd=parseInt(raw.slice(6,8));}else{let yy=parseInt(raw.slice(0,2));mm=parseInt(raw.slice(2,4));dd=parseInt(raw.slice(4,6));yyyy=yy>=30?1900+yy:2000+yy;}if(!isValidDate(yyyy,mm,dd)){mm=Math.min(Math.max(mm,1),12);dd=Math.min(Math.max(dd,1),28);}const today=new Date();let guess=new Date(yyyy,mm-1,dd);if(guess>today) yyyy-=100;if(today.getFullYear()-yyyy>120) yyyy+=100;return`${yyyy}/${String(mm).padStart(2,"0")}/${String(dd).padStart(2,"0")}`;}
-function calculateAge(dateStr){if(!dateStr||dateStr.length<10)return"";const [y,m,d]=dateStr.split("/").map(n=>parseInt(n));const today=new Date();let age=today.getFullYear()-y;if(today.getMonth()+1<m||(today.getMonth()+1===m&&today.getDate()<d)) age--;return age;}
-function calculateDaysLeft(dateStr){if(!dateStr||dateStr.length<10)return"";const [y,m,d]=dateStr.split("/").map(n=>parseInt(n));const expiry=new Date(y,m-1,d);const today=new Date();return Math.ceil((expiry-today)/1000/60/60/24);}
-function isExpired(dateStr){if(!dateStr||dateStr.length<10)return true;const [y,m,d]=dateStr.split("/").map(n=>parseInt(n));return new Date(y,m-1,d)<new Date();}
+let worker, workerReady=false;
+const canvas = document.getElementById("ocrCanvas");
+const ctx = canvas.getContext("2d");
 
-// ===== OpenCV & Tesseract =====
-let worker,workerReady=false;
-cv['onRuntimeInitialized']=async()=>{
-    document.getElementById("status").innerText="OpenCV 載入完成，可開始辨識！";
+// ===================== OpenCV 初始化 =====================
+cv['onRuntimeInitialized'] = () => {
+    document.getElementById("status").innerText = "OpenCV 載入完成，可開始辨識！";
     document.getElementById("uploadBtn").classList.remove("disabled");
     document.getElementById("cameraBtn").classList.remove("disabled");
-    worker=Tesseract.createWorker({
-        logger:m=>{
+    initWorker();
+};
+
+// ===================== Tesseract Worker =====================
+async function initWorker(){
+    worker = Tesseract.createWorker({
+        logger: m => {
             if(m.status==='recognizing text' && m.progress){
-                document.getElementById("ocrPreview").innerText=m.text||'';
+                document.getElementById("ocrPreview").innerText = m.text || '';
             }
         }
     });
-    await worker.load(); await worker.loadLanguage('eng+chi_tra'); await worker.initialize('eng+chi_tra'); workerReady=true;
-    document.getElementById("status").innerText+=" | Tesseract 已初始化";
-};
-
-// ===== 圖像處理 =====
-function imgToMat(blob){return new Promise(resolve=>{let img=new Image();img.onload=()=>{let c=document.createElement("canvas");c.width=img.width;c.height=img.height;c.getContext("2d").drawImage(img,0,0);resolve(cv.imread(c));};img.src=URL.createObjectURL(blob);});}
-function enhanceMat(mat){let gray=new cv.Mat();cv.cvtColor(mat,gray,cv.COLOR_RGBA2GRAY);cv.GaussianBlur(gray,gray,new cv.Size(3,3),0);cv.adaptiveThreshold(gray,gray,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,31,15);return gray;}
-function isBlur(mat){
-    let lap = new cv.Mat();
-    cv.Laplacian(mat, lap, cv.CV_64F);
-    let mean = new cv.Mat();
-    let stddev = new cv.Mat();
-    cv.meanStdDev(lap, mean, stddev);
-    let stdVal = stddev.data64F[0];
-    lap.delete(); mean.delete(); stddev.delete();
-    return stdVal < 20;
+    await worker.load();
+    await worker.loadLanguage('eng+chi_tra+chi_sim');
+    await worker.initialize('eng+chi_tra+chi_sim');
+    workerReady=true;
+    document.getElementById("status").innerText += " | Tesseract 已初始化";
 }
 
-// ===== 即時 OCR 預覽 =====
-let videoStream, animationFrame;
-const canvas=document.getElementById("ocrCanvas");
-const ctx=canvas.getContext("2d");
-const camera=document.getElementById("camera");
-async function livePreview(){
-    if(!videoStream) return;
-    canvas.width=camera.videoWidth; canvas.height=camera.videoHeight;
-    ctx.drawImage(camera,0,0,canvas.width,canvas.height);
-    let mat=cv.imread(canvas); let gray=enhanceMat(mat);
+// ===================== 工具函式 =====================
+function imgToMat(blob){
+    return new Promise(resolve=>{
+        let img=new Image();
+        img.onload=()=>{
+            let c=document.createElement("canvas");
+            c.width=img.width; c.height=img.height;
+            c.getContext("2d").drawImage(img,0,0);
+            resolve(cv.imread(c));
+        };
+        img.src=URL.createObjectURL(blob);
+    });
+}
+function preprocessMat(mat){
+    let gray=new cv.Mat();
+    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(3,3),0);
+    cv.adaptiveThreshold(gray, gray,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,31,15);
+    return gray;
+}
+function formatDate(str){
+    let s = str.replace(/[^\d]/g,'');
+    if(s.length===8) return `${s.slice(0,4)}/${s.slice(4,6)}/${s.slice(6,8)}`;
+    return str;
+}
 
-    // 畫 OCR 區域
-    ctx.lineWidth=3; ctx.strokeStyle='rgba(255,0,0,0.6)';
-    [[0.05,0.10,0.90,0.12],[0.05,0.25,0.55,0.08],[0.65,0.25,0.30,0.08]].forEach(r=>ctx.strokeRect(r[0]*gray.cols,r[1]*gray.rows,r[2]*gray.cols,r[3]*gray.rows));
-    ctx.strokeStyle='rgba(0,0,255,0.6)';
-    let mrzY=Math.floor(gray.rows*0.75), mrzH=gray.rows-mrzY; ctx.strokeRect(0,mrzY,gray.cols,mrzH);
+// ===================== OCR =====================
+async function ocrMRZ(mat){
+    if(!workerReady) await initWorker();
+    let gray=preprocessMat(mat);
+    const mrzY=Math.floor(gray.rows*0.75);
+    const mrzH=gray.rows-mrzY;
+    let roi=gray.roi(new cv.Rect(0,mrzY,gray.cols,mrzH));
+    let canvasTmp=document.createElement("canvas");
+    cv.imshow(canvasTmp,roi);
+    let blob=await new Promise(r=>canvasTmp.toBlob(r,"image/png"));
+    let data=null;
+    try{
+        const {data:{text}}=await worker.recognize(blob,{tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<'}); 
+        let clean=text.replace(/[^A-Z0-9<]/g,'');
+        document.getElementById("ocrPreview").innerText=clean;
+        try{
+            let parsed=MRZ.parse(clean);
+            if(parsed.valid){
+                data={documentType:"Passport",name:parsed.fields.surname+" "+parsed.fields.givenNames,id:parsed.fields.documentNumber,nationality:parsed.fields.nationality,birthday:formatDate(parsed.fields.dateOfBirth),expiry:formatDate(parsed.fields.expirationDate),sex:parsed.fields.sex,raw:clean};
+            }
+        }catch(e){data=null;}
+        drawRect(0,mrzY,gray.cols,mrzH);
+    }catch(e){data=null;}
+    roi.delete(); gray.delete();
+    return data;
+}
 
-    // 即時 OCR
-    if(workerReady){
-        let tempCanvas=document.createElement("canvas"); tempCanvas.width=gray.cols; tempCanvas.height=gray.rows;
-        cv.imshow(tempCanvas,gray);
-        tempCanvas.toBlob(async blob=>{
-            const {data:{text}}=await worker.recognize(blob);
-            document.getElementById("ocrPreview").innerText=text.trim();
-        });
+async function ocrTaiwanPermit(mat){
+    if(!workerReady) await initWorker();
+    let gray=preprocessMat(mat);
+    function roi(r){ return gray.roi(new cv.Rect(Math.floor(r.x*gray.cols),Math.floor(r.y*gray.rows),Math.floor(r.w*gray.cols),Math.floor(r.h*gray.rows))); }
+    const nameROI=roi({x:0.05,y:0.10,w:0.90,h:0.12});
+    const birthROI=roi({x:0.05,y:0.25,w:0.55,h:0.08});
+    const expROI=roi({x:0.65,y:0.25,w:0.30,h:0.08});
+    async function roiToText(roi){
+        let c=document.createElement("canvas"); c.width=roi.cols; c.height=roi.rows;
+        cv.imshow(c,roi);
+        let blob=await new Promise(r=>c.toBlob(r,"image/png"));
+        const {data:{text}}=await worker.recognize(blob);
+        return text.trim();
     }
-
-    gray.delete(); mat.delete();
-    animationFrame=requestAnimationFrame(livePreview);
+    let name=await roiToText(nameROI);
+    let birthday=formatDate(await roiToText(birthROI));
+    let expiry=formatDate(await roiToText(expROI));
+    nameROI.delete(); birthROI.delete(); expROI.delete(); gray.delete();
+    // 畫框
+    drawRect(Math.floor(0.05*canvas.width),Math.floor(0.10*canvas.height),Math.floor(0.90*canvas.width),Math.floor(0.12*canvas.height));
+    drawRect(Math.floor(0.05*canvas.width),Math.floor(0.25*canvas.height),Math.floor(0.55*canvas.width),Math.floor(0.08*canvas.height));
+    drawRect(Math.floor(0.65*canvas.width),Math.floor(0.25*canvas.height),Math.floor(0.30*canvas.width),Math.floor(0.08*canvas.height));
+    return {documentType:"Taiwan Compatriot Permit",name,birthday,expiry};
 }
 
-// ===== QR Code 生成 =====
-function generateQRCode(data){let qrDiv=document.getElementById("qrCode");qrDiv.innerHTML="";let qrText=`姓名:${data.name||data.cname||''}\n生日:${data.birthday}\n有效期:${data.expiry}`;QRCode.toCanvas(qrText,{width:180},function(err,canvas){if(!err)qrDiv.appendChild(canvas);});}
+function drawRect(x,y,w,h){
+    ctx.strokeStyle="lime";
+    ctx.lineWidth=3;
+    ctx.strokeRect(x,y,w,h);
+}
 
-// ===== 上傳 & 相機 =====
-const uploadedImage=document.getElementById("uploadedImage");
-document.getElementById("fileInput").onchange=e=>{
+// ===================== 上傳 & 相機 =====================
+const uploadedImage = document.getElementById("uploadedImage");
+const previewContainer = document.getElementById("previewContainer");
+const closePreview = document.getElementById("closePreview");
+const cameraBtn=document.getElementById("cameraBtn");
+const camera=document.getElementById("camera");
+const capture=document.getElementById("capture");
+const uploadBtn=document.getElementById("uploadBtn");
+const fileInput=document.getElementById("fileInput");
+
+fileInput.onchange = e => {
     if(e.target.files.length>0){
-        let file=e.target.files[0];
-        uploadedImage.src=URL.createObjectURL(file);
-        uploadedImage.style.display="block";
+        let file = e.target.files[0];
+        previewContainer.style.display="block";
+        uploadedImage.src = URL.createObjectURL(file);
+        uploadedImage.onload=()=>{
+            canvas.width = uploadedImage.width;
+            canvas.height = uploadedImage.height;
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+        };
+        canvas.style.display="block";
         camera.style.display="none";
         capture.style.display="none";
+        uploadBtn.classList.add("disabled");
         processImage(file);
     }
 };
-const cameraBtn=document.getElementById("cameraBtn");const capture=document.getElementById("capture");
-cameraBtn.onclick=async()=>{
-    if(cameraBtn.classList.contains("disabled"))return;
-    videoStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-    camera.srcObject=videoStream; camera.style.display="block"; capture.style.display="block";
-    uploadedImage.style.display="none";
-    livePreview();
+
+closePreview.onclick = () => {
+    previewContainer.style.display="none";
+    uploadedImage.src="";
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    canvas.style.display="none";
+    uploadBtn.classList.remove("disabled");
 };
-capture.onclick=()=>{const c=document.createElement("canvas");c.width=camera.videoWidth;c.height=camera.videoHeight;c.getContext("2d").drawImage(camera,0,0);c.toBlob(blob=>processImage(blob));};
 
-// ===== 主流程 =====
-const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
+cameraBtn.onclick=async()=>{
+    if(cameraBtn.classList.contains("disabled")) return;
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+    camera.srcObject=stream; camera.style.display="block"; capture.style.display="block";
+    realTimeOCR();
+};
 
-async function ocrProcess(mat){
-    if(!workerReady) await worker.load();
-    let gray=enhanceMat(mat);
-    let result=null;
-    let isPassport=false;
+capture.onclick=()=>{
+    const c=document.createElement("canvas"); c.width=camera.videoWidth; c.height=camera.videoHeight;
+    c.getContext("2d").drawImage(camera,0,0);
+    c.toBlob(blob=>processImage(blob));
+};
 
-    // 護照 MRZ
-    let mrzY=Math.floor(gray.rows*0.75), mrzH=gray.rows-mrzY;
-    let mrzROI=gray.roi(new cv.Rect(0,mrzY,gray.cols,mrzH));
-    let tempCanvas=document.createElement("canvas");
-    cv.imshow(tempCanvas,mrzROI);
-    let blob=await new Promise(r=>tempCanvas.toBlob(r,"image/png"));
-    try{
-        const {data:{text}}=await worker.recognize(blob,{tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<'});let clean=text.replace(/[^A-Z0-9<]/g,'');
-        let parsed=MRZ.parse(clean); if(parsed.valid){
-            isPassport=true; result={type:"Passport",name:parsed.fields.surname+" "+parsed.fields.givenNames,id:parsed.fields.documentNumber,nationality:parsed.fields.nationality,birthday:fixDate(parsed.fields.dateOfBirth),expiry:fixDate(parsed.fields.expirationDate),age:calculateAge(fixDate(parsed.fields.dateOfBirth)),daysLeft:calculateDaysLeft(fixDate(parsed.fields.expirationDate)),expired:isExpired(fixDate(parsed.fields.expirationDate)),sex:parsed.fields.sex,raw:clean};
-        }
-    }catch(e){result=null;}
-    mrzROI.delete();
-
-    // 台胞證
-    if(!isPassport){
-        function roi(r){return gray.roi(new cv.Rect(Math.floor(r.x*gray.cols),Math.floor(r.y*gray.rows),Math.floor(r.w*gray.cols),Math.floor(r.h*gray.rows)));}
-        const nameROI=roi({x:0.05,y:0.10,w:0.90,h:0.12});
-        const birthROI=roi({x:0.05,y:0.25,w:0.55,h:0.08});
-        const expROI=roi({x:0.65,y:0.25,w:0.30,h:0.08});
-        async function roiToText(r){let c=document.createElement("canvas");c.width=r.cols;c.height=r.rows;cv.imshow(c,r);let blob=await new Promise(r=>c.toBlob(r,"image/png"));const {data:{text}}=await worker.recognize(blob);return text.trim();}
-        let name=await roiToText(nameROI), birthday=fixDate(await roiToText(birthROI)), expiry=fixDate(await roiToText(expROI));
-        nameROI.delete(); birthROI.delete(); expROI.delete();
-        result={type:"Taiwan Compatriot Permit",name,birthday,expiry,age:calculateAge(birthday),daysLeft:calculateDaysLeft(expiry),expired:isExpired(expiry)};
+// ===================== 即時相機 OCR =====================
+let stopRealtime = false;
+async function realTimeOCR(){
+    stopRealtime = false;
+    const tempCanvas = document.createElement("canvas");
+    const tempCtx = tempCanvas.getContext("2d");
+    async function loop(){
+        if(stopRealtime) return;
+        tempCanvas.width = camera.videoWidth;
+        tempCanvas.height = camera.videoHeight;
+        tempCtx.drawImage(camera,0,0);
+        const blob = await new Promise(r=>tempCanvas.toBlob(r,"image/png"));
+        let mat = await imgToMat(blob);
+        let data = await ocrMRZ(mat);
+        if(!data) data = await ocrTaiwanPermit(mat);
+        mat.delete();
+        if(data) document.getElementById("ocrPreview").innerText = JSON.stringify(data,null,2);
+        requestAnimationFrame(loop);
     }
-
-    gray.delete(); return result;
+    loop();
 }
+
+// ===================== 處理影像 =====================
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
 
 async function processImage(file){
     document.getElementById("ocrPreview").innerText="OCR 處理中…";
     let mat=await imgToMat(file);
-    if(isBlur(mat)) alert("畫面可能模糊，建議重拍！");
-    let data=await ocrProcess(mat);
+    let data=await ocrMRZ(mat);
+    if(!data) data=await ocrTaiwanPermit(mat);
     mat.delete();
-    if(data){
-        document.getElementById("result").innerText=JSON.stringify(data,null,2);
-        generateQRCode(data);
-        try{await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});}catch(e){console.warn("寫入 Google Sheet 失敗:", e);}
-    }else document.getElementById("result").innerText="辨識失敗，請重拍";
+    document.getElementById("result").innerText=JSON.stringify(data,null,2);
+    try{
+        if(data) await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify(data)});
+    }catch(e){console.warn("寫入 Google Sheet 失敗:", e);}
 }
 </script>
 </body>
 </html>
+
 
 
 
