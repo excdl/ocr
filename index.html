@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 即時版</title>
-<!-- 先載入 Tesseract.js -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <style>
@@ -53,52 +52,73 @@ function formatBirthday(str){
 
 // 初始化 Tesseract
 async function initTesseract(){
-    status.innerText="Tesseract 初始化中…";
-    worker=Tesseract.createWorker({
-        logger:m=>{ if(m.status==='recognizing text') ocrPreview.innerText=m.text||''; }
-    });
-    await worker.load();
-    await worker.loadLanguage('eng+chi_tra+chi_sim');
-    await worker.initialize('eng+chi_tra+chi_sim');
-    workerReady=true;
-    status.innerText="Tesseract 初始化完成 ✅";
-    cameraBtn.disabled=false;
-    captureBtn.disabled=false;
+    try{
+        status.innerText="Tesseract 初始化中…";
+        worker=Tesseract.createWorker({
+            logger:m=>{ if(m.status==='recognizing text') ocrPreview.innerText=m.text||''; }
+        });
+        await worker.load();
+        await worker.loadLanguage('eng+chi_tra+chi_sim');
+        await worker.initialize('eng+chi_tra+chi_sim');
+        workerReady=true;
+        status.innerText="Tesseract 初始化完成 ✅";
+        cameraBtn.disabled=false;
+        captureBtn.disabled=false;
+    }catch(e){
+        console.error("Tesseract 初始化失敗:", e);
+        status.innerText="Tesseract 初始化失敗 ❌";
+    }
 }
 
 // OCR 處理
 async function processCanvas(canvas){
     if(!workerReady){ alert("Tesseract 尚未就緒"); return; }
-    const { data:{ text } } = await worker.recognize(canvas);
-    ocrPreview.innerText=text.trim().slice(0,300);
-
-    let result={raw:text};
-    let mrzText=text.replace(/\s/g,'');
     try{
-        const mrz=MRZ.parse(mrzText);
-        if(mrz.valid){
-            result.documentType="Passport";
-            result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
-            result.id=mrz.fields.documentNumber;
-            result.nationality=mrz.fields.nationality;
-            result.birthday=formatBirthday(mrz.fields.dateOfBirth);
-            result.expiry=formatBirthday(mrz.fields.expirationDate);
-            result.sex=mrz.fields.sex;
-        }else{
-            result.documentType="Taiwan Compatriot Permit";
-            let lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l);
-            result.name=lines[0]||'';
-            result.birthday=formatBirthday(lines[1]||'');
-            result.expiry=formatBirthday(lines[2]||'');
-        }
-    }catch(e){ result.documentType="Unknown"; }
+        const { data:{ text } } = await worker.recognize(canvas);
+        ocrPreview.innerText=text.trim().slice(0,300);
 
-    // 送 Google Sheet
-    fetch(SCRIPT_URL,{
-        method:'POST',
-        body:JSON.stringify(result),
-        headers:{'Content-Type':'application/json'}
-    }).then(res=>console.log(res.status));
+        let result={raw:text};
+        let mrzText=text.replace(/\s/g,'');
+        try{
+            const mrz=MRZ.parse(mrzText);
+            if(mrz.valid){
+                result.documentType="Passport";
+                result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
+                result.id=mrz.fields.documentNumber;
+                result.nationality=mrz.fields.nationality;
+                result.birthday=formatBirthday(mrz.fields.dateOfBirth);
+                result.expiry=formatBirthday(mrz.fields.expirationDate);
+                result.sex=mrz.fields.sex;
+            }else{
+                result.documentType="Taiwan Compatriot Permit";
+                let lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l);
+                result.name=lines[0]||'';
+                result.birthday=formatBirthday(lines[1]||'');
+                result.expiry=formatBirthday(lines[2]||'');
+            }
+        }catch(e){
+            console.warn("MRZ 解析失敗:", e);
+            result.documentType="Unknown";
+        }
+
+        // 送 Google Sheet
+        try{
+            const res = await fetch(SCRIPT_URL,{
+                method:'POST',
+                body:JSON.stringify(result),
+                headers:{'Content-Type':'application/json'}
+            });
+            if(res.ok) status.innerText="已送出至 Google Sheet ✅";
+            else status.innerText="送出 Google Sheet 失敗 ⚠️";
+        }catch(e){
+            console.error("送出 Google Sheet 失敗:", e);
+            status.innerText="送出 Google Sheet 失敗 ⚠️";
+        }
+
+    }catch(e){
+        console.error("OCR 失敗:", e);
+        status.innerText="OCR 失敗 ❌";
+    }
 }
 
 // 打開相機
@@ -124,7 +144,7 @@ captureBtn.onclick=()=>{
     processCanvas(previewCanvas);
 };
 
-// 等頁面載入後初始化 Tesseract
+// 初始化
 window.onload = initTesseract;
 </script>
 </body>
