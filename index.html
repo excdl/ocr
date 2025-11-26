@@ -3,10 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR + MRZ + Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <script async src="https://docs.opencv.org/4.9.0/opencv.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:linear-gradient(135deg,#4facfe,#00f2fe);}
 .container{width:95%;max-width:600px;margin:20px auto;background:white;border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,0.15);}
@@ -42,29 +41,30 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;over
 </div>
 
 <script>
-// -------- Google Sheet URL ----------
 const SCRIPT_URL="YOUR_GOOGLE_SCRIPT_URL"; // <-- 改成你的 Google Apps Script URL
 let historyData=[];
-
-// -------- 初始化 Tesseract ----------
 let worker, workerReady=false;
 let cvReady=false;
 const status=document.getElementById("status");
 const ocrPreview=document.getElementById("ocrPreview");
 
 async function initTesseract(){
-    worker=Tesseract.createWorker({
-        logger:m=>{ if(m.status==='recognizing text' && m.progress) ocrPreview.innerText=m.text||''; }
-    });
-    await worker.load();
-    await worker.loadLanguage('eng+chi_tra+chi_sim');
-    await worker.initialize('eng+chi_tra+chi_sim');
-    await worker.setParameters({ tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<一二三四五六七八九零ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" });
-    workerReady=true;
-    if(cvReady) status.innerText="OpenCV + Tesseract 初始化完成 ✅";
+    try{
+        console.log("建立 Tesseract worker");
+        worker=Tesseract.createWorker({
+            logger:m=>{ if(m.status==='recognizing text') ocrPreview.innerText=m.text||''; }
+        });
+        await worker.load();
+        console.log("Tesseract load 完成");
+        await worker.loadLanguage('eng+chi_tra+chi_sim');
+        console.log("Tesseract language load 完成");
+        await worker.initialize('eng+chi_tra+chi_sim');
+        console.log("Tesseract initialize 完成");
+        workerReady=true;
+        status.innerText=cvReady?"OpenCV + Tesseract 初始化完成 ✅":"等待 OpenCV 初始化…";
+    }catch(e){ console.error("Tesseract 初始化失敗:", e); status.innerText="Tesseract 初始化失敗 ❌"; }
 }
 
-// -------- OpenCV 初始化 ----------
 if(typeof cv==='undefined'){
     status.innerText="OpenCV 載入中…";
 }else{
@@ -75,7 +75,6 @@ if(typeof cv==='undefined'){
     };
 }
 
-// -------- 工具函數 ----------
 function formatBirthday(str){
     let clean=str.replace(/[^\d]/g,'');
     if(clean.length===6) return '19'+clean.slice(0,2)+'/'+clean.slice(2,4)+'/'+clean.slice(4,6);
@@ -83,7 +82,6 @@ function formatBirthday(str){
     return str;
 }
 
-// MRZ 自動裁切
 function extractMRZRegion(canvas){
     try{
         let src=cv.imread(canvas);
@@ -143,7 +141,6 @@ function extractMRZRegion(canvas){
     }catch(e){ console.error(e); return canvas; }
 }
 
-// OCR + Google Sheet + Dashboard
 async function processCanvas(canvas){
     if(!workerReady){ status.innerText="Tesseract 尚未就緒 ❌"; return; }
     const mrzCanvas=extractMRZRegion(canvas);
@@ -171,16 +168,13 @@ async function processCanvas(canvas){
         }
     }catch(e){ result.documentType="Unknown"; }
 
-    // Google Sheet
     fetch(SCRIPT_URL,{method:'POST',body:JSON.stringify(result),headers:{'Content-Type':'application/json'}})
     .then(res=>console.log(res.status));
 
-    // Dashboard
     historyData.unshift(result);
     loadDashboard();
 }
 
-// ---------- Dashboard ----------
 function loadDashboard(){
     const container=document.getElementById("cardsContainer");
     container.innerHTML='';
@@ -200,7 +194,6 @@ document.getElementById("exportCsv").onclick=()=>{
     URL.revokeObjectURL(url);
 }
 
-// ---------- 上傳/相機 ----------
 const fileInput=document.getElementById("fileInput");
 fileInput.onchange=e=>{
     if(e.target.files.length>0){
