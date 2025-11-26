@@ -4,20 +4,21 @@
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR App</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js-core@2.3.0/tesseract-core.wasm.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:linear-gradient(135deg,#4facfe,#00f2fe);}
-.container{width:92%;max-width:900px;margin:28px auto;background:white;border-radius:18px;padding:24px;box-shadow:0 12px 28px rgba(0,0,0,0.15);}
-h2{text-align:center;color:#333;}
+.container{width:92%;max-width:900px;margin:28px auto;background:white;border-radius:18px;padding:24px;box-shadow:0 12px 28px rgba(0,0,0,0.15);animation:fadeIn 0.6s;}
+@keyframes fadeIn{from {opacity:0;transform:translateY(-20px);} to {opacity:1;transform:translateY(0);}}
+h2{margin-top:0;text-align:center;color:#333;}
 .upload-box{display:flex;gap:10px;margin-bottom:12px;}
 button,label{background:#2979ff;color:white;border:none;padding:12px 18px;border-radius:12px;cursor:pointer;font-size:16px;flex:1;text-align:center;transition:.2s;}
 button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
-.preview-container{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;}
-canvas{border-radius:12px; width:48%; max-width:400px; background:#eee;}
-#ocrPreview{background:rgba(0,0,0,0.8);color:#0f0;padding:8px;border-radius:8px;max-width:90%;max-height:150px;overflow:auto;font-family:monospace;margin-top:12px;}
+.preview-container{display:flex;gap:12px;position:relative;flex-wrap:wrap;}
+canvas{border-radius:12px; width:48%; height:auto; background:#eee;}
+#ocrPreview{position:absolute;top:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;padding:8px;border-radius:8px;max-width:40%;max-height:40%;overflow:auto;font-family:monospace;}
 #status,pre{margin-top:12px;}
-video{border-radius:12px; width:48%; max-width:400px;}
 </style>
 </head>
 <body>
@@ -32,8 +33,8 @@ video{border-radius:12px; width:48%; max-width:400px;}
 <div class="preview-container">
 <canvas id="fullCanvas"></canvas>
 <canvas id="mrzCanvas"></canvas>
-</div>
 <div id="ocrPreview">OCR 預覽</div>
+</div>
 
 <video id="camera" autoplay playsinline style="display:none;"></video>
 <button id="capture" style="display:none;margin-top:12px;">📸 拍照</button>
@@ -64,7 +65,7 @@ async function initTesseract(){
     try{
         worker=Tesseract.createWorker({
             workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/worker.min.js',
-            corePath: './tesseract-core.wasm.js', // 本地載入
+            corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@2.3.0/tesseract-core.wasm.js',
             logger: m => { if(m.status==='recognizing text' && m.progress) ocrPreview.innerText=m.text||''; }
         });
         await worker.load();
@@ -74,40 +75,51 @@ async function initTesseract(){
         status.innerText="OpenCV + Tesseract 初始化完成 ✅";
     }catch(e){
         console.error("Tesseract 初始化失敗:", e);
-        status.innerText="Tesseract 初始化失敗 ❌ 請檢查本地檔案";
+        status.innerText="Tesseract 初始化失敗 ❌，僅顯示 MRZ 預覽";
     }
 }
 
-// ===================== MRZ 區域偵測 =====================
+// ===================== Google Sheet =====================
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
+async function sendToSheet(data){
+    if(!data) return;
+    try{
+        const res=await fetch(SCRIPT_URL,{method:'POST',body:JSON.stringify(data),headers:{'Content-Type':'application/json'}});
+        status.innerText=res.ok?"已送出至 Google Sheet ✅":"送出失敗 ⚠️";
+    }catch(e){ status.innerText="送出失敗 ⚠️"; console.error(e); }
+}
+
+// ===================== MRZ 偵測與透視校正 =====================
 function extractMRZRegion(canvas){
     try{
-        let src = cv.imread(canvas);
-        let gray = new cv.Mat();
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-
-        let clahe = new cv.CLAHE(2.0, new cv.Size(8,8));
-        let enhanced = new cv.Mat();
-        clahe.apply(gray, enhanced);
-
-        const blur = new cv.Mat();
-        cv.GaussianBlur(enhanced, blur, new cv.Size(3,3), 0);
-        const thresh = new cv.Mat();
-        cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-
-        const contours = new cv.MatVector();
-        const hierarchy = new cv.Mat();
-        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        let src=cv.imread(canvas);
+        let gray=new cv.Mat();
+        cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY,0);
+        let clahe=new cv.CLAHE(2.0,new cv.Size(8,8));
+        let enhanced=new cv.Mat();
+        clahe.apply(gray,enhanced);
+        let blur=new cv.Mat();
+        cv.GaussianBlur(enhanced,blur,new cv.Size(3,3),0);
+        let thresh=new cv.Mat();
+        cv.threshold(blur,thresh,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
+        let contours=new cv.MatVector();
+        let hierarchy=new cv.Mat();
+        cv.findContours(thresh,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
 
         let mrzRect=null;
+        let mrzContour=null;
         for(let i=0;i<contours.size();i++){
             let cnt=contours.get(i);
-            let rect = cv.boundingRect(cnt);
+            let rect=cv.boundingRect(cnt);
             if(rect.width>rect.height*5 && rect.y>src.rows*0.5){
-                if(!mrzRect || rect.y>mrzRect.y) mrzRect=rect;
+                if(!mrzRect || rect.y>mrzRect.y){
+                    mrzRect=rect;
+                    mrzContour=cnt;
+                }
             }
         }
 
-        // 繪製紅框到 fullCanvas
+        // fullCanvas 顯示原圖 + 框
         const ctxFull=fullCanvas.getContext('2d');
         fullCanvas.width=canvas.width;
         fullCanvas.height=canvas.height;
@@ -115,63 +127,69 @@ function extractMRZRegion(canvas){
         if(mrzRect){
             ctxFull.strokeStyle='red';
             ctxFull.lineWidth=4;
-            ctxFull.strokeRect(mrzRect.x, mrzRect.y, mrzRect.width, mrzRect.height);
+            ctxFull.strokeRect(mrzRect.x,mrzRect.y,mrzRect.width,mrzRect.height);
         }
 
-        // 裁切 MRZ 區域
-        let mrzCanvas=document.createElement('canvas');
-        if(mrzRect){
-            mrzCanvas.width=mrzRect.width;
-            mrzCanvas.height=mrzRect.height;
-            const ctx=mrzCanvas.getContext('2d');
-            ctx.drawImage(canvas, mrzRect.x, mrzRect.y, mrzRect.width, mrzRect.height, 0, 0, mrzRect.width, mrzRect.height);
+        // 透視矯正
+        let mrzCanvasEl=mrzCanvasElement;
+        if(mrzContour){
+            let rotated = new cv.Mat();
+            let angle = cv.minAreaRect(mrzContour).angle;
+            let center = new cv.Point(src.cols/2, src.rows/2);
+            let M = cv.getRotationMatrix2D(center, angle, 1);
+            cv.warpAffine(src, rotated, M, new cv.Size(src.cols, src.rows), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+            let mrzImg=new cv.Mat(rotated, new cv.Rect(mrzRect.x,mrzRect.y,mrzRect.width,mrzRect.height));
+            mrzCanvasEl.width=mrzRect.width;
+            mrzCanvasEl.height=mrzRect.height;
+            cv.imshow(mrzCanvasEl, mrzImg);
+            mrzImg.delete(); rotated.delete(); M.delete();
         } else {
-            mrzCanvas.width=canvas.width;
-            mrzCanvas.height=canvas.height;
-            const ctx=mrzCanvas.getContext('2d');
+            mrzCanvasEl.width=canvas.width;
+            mrzCanvasEl.height=canvas.height;
+            const ctx=mrzCanvasEl.getContext('2d');
             ctx.drawImage(canvas,0,0);
         }
 
         src.delete(); gray.delete(); enhanced.delete(); blur.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); clahe.delete();
-        return mrzCanvas;
-    }catch(e){ console.error("MRZ 偵測失敗:", e); return canvas; }
+        return mrzCanvasEl;
+    }catch(e){ console.error("MRZ偵測或矯正失敗", e); return canvas; }
 }
 
 // ===================== OCR =====================
 async function processCanvas(canvas,previewOnly=false){
-    if(!workerReady){ status.innerText="Tesseract 初始化失敗 ❌"; return; }
-
     const mrzCanvas=extractMRZRegion(canvas);
-    mrzCanvasElement.width=mrzCanvas.width;
-    mrzCanvasElement.height=mrzCanvas.height;
-    mrzCanvasElement.getContext('2d').drawImage(mrzCanvas,0,0);
 
-    try{
-        const {data:{text}} = await worker.recognize(mrzCanvas);
-        ocrPreview.innerText=text.trim().slice(0,300);
-
-        let result={raw:text};
-        let mrzText=text.replace(/\s/g,'');
+    if(workerReady){
         try{
-            const mrz=MRZ.parse(mrzText);
-            if(mrz.valid){
-                result.documentType="Passport";
-                result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
-                result.id=mrz.fields.documentNumber;
-                result.nationality=mrz.fields.nationality;
-                result.birthday=formatBirthday(mrz.fields.dateOfBirth);
-                result.expiry=formatBirthday(mrz.fields.expirationDate);
-                result.sex=mrz.fields.sex;
-            } else {
-                result.documentType="Taiwan Compatriot Permit";
-                let lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l);
-                result.name=lines[0]||'';
-                result.birthday=formatBirthday(lines[1]||'');
-                result.expiry=formatBirthday(lines[2]||'');
-            }
-        }catch(e){ result.documentType="Unknown"; }
-        resultPre.innerText=JSON.stringify(result,null,2);
-    }catch(e){ console.error("OCR 失敗:",e); status.innerText="OCR 失敗 ❌"; }
+            const {data:{text}} = await worker.recognize(mrzCanvas);
+            ocrPreview.innerText=text.trim().slice(0,300);
+
+            let result={raw:text};
+            let mrzText=text.replace(/\s/g,'');
+            try{
+                const mrz=MRZ.parse(mrzText);
+                if(mrz.valid){
+                    result.documentType="Passport";
+                    result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
+                    result.id=mrz.fields.documentNumber;
+                    result.nationality=mrz.fields.nationality;
+                    result.birthday=formatBirthday(mrz.fields.dateOfBirth);
+                    result.expiry=formatBirthday(mrz.fields.expirationDate);
+                    result.sex=mrz.fields.sex;
+                } else {
+                    result.documentType="Taiwan Compatriot Permit";
+                    let lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l);
+                    result.name=lines[0]||'';
+                    result.birthday=formatBirthday(lines[1]||'');
+                    result.expiry=formatBirthday(lines[2]||'');
+                }
+            }catch(e){ result.documentType="Unknown"; }
+            resultPre.innerText=JSON.stringify(result,null,2);
+            if(!previewOnly) sendToSheet(result);
+        }catch(e){ console.error("OCR 失敗:",e); status.innerText="OCR 失敗 ❌"; }
+    } else {
+        ocrPreview.innerText="Tesseract 未初始化，僅顯示 MRZ 預覽";
+    }
 }
 
 // ===================== 上傳 & 相機 =====================
@@ -196,7 +214,6 @@ cameraBtn.onclick=async()=>{
         capture.style.display='block';
         if(liveOCRInterval) clearInterval(liveOCRInterval);
         liveOCRInterval=setInterval(async()=>{
-            if(!workerReady) return;
             const tempCanvas=document.createElement('canvas');
             tempCanvas.width=camera.videoWidth;
             tempCanvas.height=camera.videoHeight;
@@ -222,6 +239,7 @@ if(typeof cv!=='undefined'){
 </script>
 </body>
 </html>
+
 
 
 
