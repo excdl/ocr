@@ -3,15 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR 即時版</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
+<!-- 先載入 Tesseract.js -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:linear-gradient(135deg,#4facfe,#00f2fe);}
 .container{width:95%;max-width:600px;margin:20px auto;background:white;border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,0.15);}
 h1{text-align:center;color:#333;}
-.upload-box, .camera-box{display:flex;gap:10px;margin-bottom:12px;}
-button,label{background:#2979ff;color:white;border:none;padding:10px 14px;border-radius:10px;cursor:pointer;flex:1;text-align:center;}
-button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
+.camera-box{display:flex;gap:10px;margin-bottom:12px;}
+button{background:#2979ff;color:white;border:none;padding:10px 14px;border-radius:10px;cursor:pointer;flex:1;text-align:center;}
+button:disabled{opacity:0.5;cursor:not-allowed;}
 canvas,video{width:100%;border-radius:10px;display:none;margin-top:10px;}
 pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;overflow-y:auto;font-family:monospace;}
 </style>
@@ -21,8 +22,8 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;over
 <h1>護照 / 台胞證 OCR 即時版</h1>
 
 <div class="camera-box">
-<button id="cameraBtn" disabled class="disabled">📷 請等待 Tesseract 初始化…</button>
-<button id="captureBtn" disabled class="disabled">📸 拍照 OCR</button>
+<button id="cameraBtn" disabled>📷 請等待 Tesseract 初始化…</button>
+<button id="captureBtn" disabled>📸 拍照 OCR</button>
 </div>
 
 <video id="camera" autoplay playsinline></video>
@@ -34,6 +35,7 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;over
 <script>
 const SCRIPT_URL="YOUR_GOOGLE_SCRIPT_URL"; // <-- 換成你的 Google Apps Script URL
 let worker, workerReady=false;
+
 const status=document.getElementById("status");
 const ocrPreview=document.getElementById("ocrPreview");
 const previewCanvas=document.getElementById("previewCanvas");
@@ -60,11 +62,9 @@ async function initTesseract(){
     await worker.initialize('eng+chi_tra+chi_sim');
     workerReady=true;
     status.innerText="Tesseract 初始化完成 ✅";
-    // 啟用按鈕
-    cameraBtn.disabled=false; cameraBtn.classList.remove('disabled');
-    captureBtn.disabled=false; captureBtn.classList.remove('disabled');
+    cameraBtn.disabled=false;
+    captureBtn.disabled=false;
 }
-initTesseract();
 
 // OCR 處理
 async function processCanvas(canvas){
@@ -123,6 +123,9 @@ captureBtn.onclick=()=>{
     ctx.drawImage(camera,0,0);
     processCanvas(previewCanvas);
 };
+
+// 等頁面載入後初始化 Tesseract
+window.onload = initTesseract;
 </script>
 </body>
 </html>
