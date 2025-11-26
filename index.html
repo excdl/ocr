@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>護照 / 台胞證 OCR App</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
 <script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
 <script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <style>
@@ -51,16 +51,24 @@ pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:220px;over
 let worker, workerReady=false;
 const canvas = document.getElementById("ocrCanvas");
 const ctx = canvas.getContext("2d");
+const uploadedImage = document.getElementById("uploadedImage");
+const previewContainer = document.getElementById("previewContainer");
+const closePreview = document.getElementById("closePreview");
+const cameraBtn=document.getElementById("cameraBtn");
+const camera=document.getElementById("camera");
+const capture=document.getElementById("capture");
+const uploadBtn=document.getElementById("uploadBtn");
+const fileInput=document.getElementById("fileInput");
 
 // ===================== OpenCV 初始化 =====================
 cv['onRuntimeInitialized'] = async () => {
-    document.getElementById("status").innerText = "OpenCV 載入完成，可開始辨識！";
-    document.getElementById("uploadBtn").classList.remove("disabled");
-    document.getElementById("cameraBtn").classList.remove("disabled");
+    document.getElementById("status").innerText = "OpenCV 載入完成";
+    uploadBtn.classList.remove("disabled");
+    cameraBtn.classList.remove("disabled");
     await initWorker();
 };
 
-// ===================== Tesseract Worker =====================
+// ===================== Tesseract Worker 初始化 =====================
 async function initWorker(){
     worker = Tesseract.createWorker({
         logger: m => {
@@ -108,15 +116,6 @@ function drawRect(x,y,w,h){
 }
 
 // ===================== 上傳 & 預覽 =====================
-const uploadedImage = document.getElementById("uploadedImage");
-const previewContainer = document.getElementById("previewContainer");
-const closePreview = document.getElementById("closePreview");
-const cameraBtn=document.getElementById("cameraBtn");
-const camera=document.getElementById("camera");
-const capture=document.getElementById("capture");
-const uploadBtn=document.getElementById("uploadBtn");
-const fileInput=document.getElementById("fileInput");
-
 fileInput.onchange = e => {
     if(e.target.files.length>0){
         let file = e.target.files[0];
@@ -156,9 +155,7 @@ capture.onclick=()=>{
     c.toBlob(blob=>processImage(blob));
 };
 
-// ===================== OCR 處理 =====================
-const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
-
+// ===================== OCR 函式 =====================
 async function ocrMRZ(mat){
     if(!workerReady) await initWorker();
     let gray=preprocessMat(mat);
@@ -209,6 +206,9 @@ async function ocrTaiwanPermit(mat){
     return {documentType:"Taiwan Compatriot Permit",name,birthday,expiry};
 }
 
+// ===================== 主流程 =====================
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
+
 async function processImage(file){
     document.getElementById("ocrPreview").innerText="OCR 處理中…";
     let mat=await imgToMat(file);
@@ -223,7 +223,6 @@ async function processImage(file){
 </script>
 </body>
 </html>
-
 
 
 
