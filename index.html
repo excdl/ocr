@@ -5,10 +5,9 @@
 <title>護照 / 台胞證 OCR MRZ + Google Sheet</title>
 <style>
 body{font-family:Arial,sans-serif;background:#f0f0f0;padding:20px;}
-.container{max-width:480px;margin:auto;background:white;padding:20px;border-radius:12px;box-shadow:0 0 12px rgba(0,0,0,0.1);position:relative;}
+.container{max-width:480px;margin:auto;background:white;padding:20px;border-radius:12px;box-shadow:0 0 12px rgba(0,0,0,0.1);}
 button,input{padding:10px 14px;margin:5px 0;border-radius:8px;border:1px solid #ccc;cursor:pointer;}
 canvas{display:block;margin-top:10px;}
-#overlayCanvas{position:absolute;top:0;left:0;pointer-events:none;}
 pre{background:#222;color:#0f0;padding:10px;border-radius:8px;overflow:auto;}
 video{display:none;}
 </style>
@@ -18,30 +17,23 @@ video{display:none;}
 <h2>護照 / 台胞證 OCR MRZ + Google Sheet</h2>
 <input type="file" id="fileInput" accept="image/*">
 <button id="cameraBtn">拍照 OCR</button>
-<button id="cameraLiveBtn">即時掃描 MRZ</button>
 
 <canvas id="canvas"></canvas>
-<canvas id="overlayCanvas"></canvas>
 <pre id="status">狀態: 等待操作</pre>
 <pre id="result">辨識結果將顯示於此</pre>
 <video id="videoElement" autoplay playsinline></video>
 </div>
 
 <script>
-const OCR_API_KEY = 'K82066068388957'; // <-- 換成你的 OCR.Space Key
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx7Ud8LuneyLgbFvH9OwtyK_2-NwLvhmvFmkY1RMZbnCauTUjYTQ_mFKRURI63iOQLE/exec'; // <-- 換成你的 Google Apps Script URL
+const OCR_API_KEY = 'YOUR_OCR_SPACE_KEY'; // <-- 換成你的 OCR.Space API Key
+const SCRIPT_URL = 'YOUR_GOOGLE_SCRIPT_URL'; // <-- 換成你的 Google Apps Script URL
 
 const fileInput = document.getElementById("fileInput");
 const cameraBtn = document.getElementById("cameraBtn");
-const cameraLiveBtn = document.getElementById("cameraLiveBtn");
 const canvas = document.getElementById("canvas");
-const overlayCanvas = document.getElementById("overlayCanvas");
 const status = document.getElementById("status");
 const resultPre = document.getElementById("result");
 const videoElement = document.getElementById("videoElement");
-
-let liveStream = null;
-let liveInterval = null;
 
 // -------------------- 工具函數 --------------------
 function resizeImage(img,maxWidth=1024){
@@ -54,25 +46,6 @@ function resizeImage(img,maxWidth=1024){
     const resizedImg = new Image();
     resizedImg.src = tmpCanvas.toDataURL("image/png");
     return resizedImg;
-}
-
-function drawMRZOverlay(img){
-    const w = img.width || img.videoWidth;
-    const h = img.height || img.videoHeight;
-    overlayCanvas.width = w;
-    overlayCanvas.height = h;
-    overlayCanvas.style.display = "block";
-    overlayCanvas.style.top = canvas.offsetTop+"px";
-    overlayCanvas.style.left = canvas.offsetLeft+"px";
-    const ctx = overlayCanvas.getContext("2d");
-    ctx.clearRect(0,0,w,h);
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    ctx.fillRect(0,0,w,h);
-    const mrzHeight = h/3;
-    ctx.clearRect(0,h-mrzHeight,w,mrzHeight);
-    ctx.strokeStyle = "red";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(0,h-mrzHeight,w,mrzHeight);
 }
 
 function cropMRZ(img){
@@ -113,24 +86,41 @@ async function doOCR(croppedCanvas){
     }
 }
 
+// -------------------- MRZ 智能解析 --------------------
 function parseMRZ(text){
-    if(text.length < 30) return;
-    let result = {};
-    if(text[0]=='P'){ // Passport
+    text = text.replace(/\s/g,'');
+    let result = {rawMRZ:text};
+
+    // Passport MRZ (2行44字符)
+    if(text.length===88 && text.startsWith('P')){
         result.documentType = "Passport";
+        const lines = text.match(/.{44}/g);
+        result.id = lines[0].substring(5,14).replace(/</g,'');
+        result.nationality = lines[0].substring(10,13);
+        result.name = lines[0].substring(5).split("<<").slice(1).map(s=>s.replace(/</g,' ')).join(" ");
+        result.birthday = formatDate(lines[1].substring(0,6));
+        result.sex = lines[1].substring(7,8)==='M'?'男':'女';
+        result.expiry = formatDate(lines[1].substring(8,14));
+    } 
+    // Taiwan Compatriot Permit / Visa / ID (2行30字符)
+    else if(text.length===60){
+        result.documentType = "Taiwan Compatriot Permit or Visa";
+        const lines = text.match(/.{30}/g);
+        result.id = lines[0].substring(0,9).replace(/</g,'');
+        result.name = lines[0].substring(10).replace(/</g,' ').trim();
+        result.birthday = formatDate(lines[1].substring(0,6));
+        result.expiry = formatDate(lines[1].substring(8,14));
+        result.sex = lines[1].substring(7,8)==='M'?'男':'女';
+    } 
+    else {
+        result.documentType = "Unknown MRZ Format";
         const lines = text.match(/.{1,44}/g);
         if(lines && lines.length>=2){
+            result.name = lines[0].split("<<").slice(1).map(s=>s.replace(/</g,' ')).join(" ");
             result.id = lines[0].substring(5,14).replace(/</g,'');
-            result.nationality = lines[0].substring(10,13);
-            result.name = lines[0].substring(5).split("<<").map(s=>s.replace(/</g,' ')).slice(1).join(" ");
-            result.birthday = formatDate(lines[1].substring(0,6));
-            result.sex = lines[1].substring(7,8)==='M'?'男':'女';
-            result.expiry = formatDate(lines[1].substring(8,14));
         }
-    } else {
-        result.documentType = "Taiwan Compatriot Permit";
-        result.rawMRZ = text;
     }
+
     resultPre.innerText = "OCR 結果:\n"+text+"\n\n解析結果:\n"+JSON.stringify(result,null,2);
     sendToSheet(result);
 }
@@ -167,7 +157,6 @@ fileInput.onchange = e => {
     img.onload = async ()=>{
         const resized = resizeImage(img);
         resized.onload = async ()=>{
-            drawMRZOverlay(resized);
             cropMRZ(resized);
             await doOCR(canvas);
         };
@@ -175,55 +164,23 @@ fileInput.onchange = e => {
     img.src = URL.createObjectURL(e.target.files[0]);
 };
 
-// -------------------- 拍照 --------------------
+// -------------------- 拍照 OCR --------------------
 cameraBtn.onclick = async ()=>{
     try{
-        liveStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-        videoElement.srcObject = liveStream;
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+        videoElement.srcObject = stream;
         videoElement.style.display = "block";
         await new Promise(r=>videoElement.play());
         status.innerText = "對準護照或台胞證，等待 2 秒自動拍照...";
         await new Promise(r=>setTimeout(r,2000));
-        drawMRZOverlay(videoElement);
         cropMRZ(videoElement);
-        liveStream.getTracks().forEach(t=>t.stop());
+        stream.getTracks().forEach(t=>t.stop());
         await doOCR(canvas);
     }catch(e){
         status.innerText = "無法開啟相機 ❌";
         console.error(e);
     }
 };
-
-// -------------------- 即時掃描 MRZ --------------------
-cameraLiveBtn.onclick = async ()=>{
-    try{
-        liveStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-        videoElement.srcObject = liveStream;
-        videoElement.style.display = "block";
-        await new Promise(r=>videoElement.play());
-        status.innerText = "即時掃描中，將 MRZ 對準紅框...";
-        if(liveInterval) clearInterval(liveInterval);
-        liveInterval = setInterval(async ()=>{
-            drawMRZOverlay(videoElement);
-            cropMRZ(videoElement);
-            await doOCR(canvas);
-        },500);
-    }catch(e){
-        status.innerText = "無法開啟相機 ❌";
-        console.error(e);
-    }
-};
-
-// 停止即時掃描
-function stopLiveScan(){
-    if(liveInterval) clearInterval(liveInterval);
-    if(liveStream){
-        liveStream.getTracks().forEach(t=>t.stop());
-        liveStream = null;
-    }
-    overlayCanvas.getContext("2d").clearRect(0,0,overlayCanvas.width,overlayCanvas.height);
-    status.innerText = "即時掃描已停止";
-}
 </script>
 </body>
 </html>
