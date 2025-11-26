@@ -2,164 +2,32 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR App (GitHub Pages 友善版)</title>
-<style>
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:linear-gradient(135deg,#4facfe,#00f2fe);}
-.container{width:92%;max-width:480px;margin:28px auto;background:white;border-radius:18px;padding:24px;box-shadow:0 12px 28px rgba(0,0,0,0.15);}
-h2{text-align:center;color:#333;}
-.upload-box{display:flex;gap:10px;margin-bottom:12px;}
-button,label{background:#2979ff;color:white;border:none;padding:12px 18px;border-radius:12px;cursor:pointer;font-size:16px;flex:1;text-align:center;}
-video,canvas{width:100%;border-radius:12px;display:none;margin-top:12px;}
-#ocrPreview,pre{background:#222;color:#0f0;padding:12px;border-radius:10px;height:150px;overflow-y:auto;margin-top:12px;font-family:monospace;}
-.close-preview{position:absolute;top:8px;right:8px;background:red;color:white;padding:2px 6px;border-radius:6px;cursor:pointer;font-size:14px;}
-.preview-container{position:relative;}
-</style>
+<title>Tesseract 測試</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
 </head>
 <body>
-<div class="container">
-<h2>護照 / 台胞證 OCR App</h2>
-<div class="upload-box">
-<input type="file" id="fileInput" accept="image/*" hidden>
-<label id="uploadBtn" for="fileInput">📤 上傳圖片</label>
-<button id="cameraBtn">📷 使用相機</button>
-</div>
-<div class="preview-container">
-<canvas id="previewCanvas"></canvas>
-<div class="close-preview" id="closePreview" style="display:none;">×</div>
-</div>
-<video id="camera" autoplay playsinline></video>
-<button id="capture" style="display:none;margin-top:12px;">📸 拍照</button>
-<p id="status">初始化中…</p>
-<pre id="result">辨識結果將顯示於此</pre>
-<pre id="ocrPreview">OCR 預覽</pre>
-</div>
-
-<!-- Tesseract.js -->
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
-<!-- MRZ -->
-<script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
-<!-- OpenCV -->
-<script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
-
+<h2>Tesseract 初始化測試</h2>
+<pre id="status">狀態：尚未初始化</pre>
 <script>
-let worker, workerReady=false;
-const status=document.getElementById("status");
-const resultPre=document.getElementById("result");
-const ocrPreview=document.getElementById("ocrPreview");
-const previewCanvas=document.getElementById("previewCanvas");
-const closePreview=document.getElementById("closePreview");
-
-// ===================== Tesseract 初始化 =====================
-async function initTesseract() {
-    if(typeof Tesseract === 'undefined'){ 
-        status.innerText="Tesseract 未載入 ❌"; 
-        return; 
+window.onload = async () => {
+    const status = document.getElementById("status");
+    if(typeof Tesseract === 'undefined') {
+        status.innerText = "Tesseract 未載入 ❌";
+        return;
     }
 
-    worker = Tesseract.createWorker({
-        logger: m => { if(m.status==='recognizing text' && m.progress) ocrPreview.innerText=m.text||''; },
+    const worker = Tesseract.createWorker({
         workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/worker.min.js',
         corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.1.0/tesseract-core.wasm.js',
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0_best/'
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0_best/',
+        logger: m => console.log(m)
     });
 
-    try{
-        status.innerText="載入 Worker…";
-        await worker.load();
-        status.innerText="載入語言…";
-        await worker.loadLanguage('eng+chi_tra+chi_sim');
-        await worker.initialize('eng+chi_tra+chi_sim');
-        await worker.setParameters({
-            tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<一二三四五六七八九零abcdefghijklmnopqrstuvwxyz",
-            tessedit_pageseg_mode:Tesseract.PSM.AUTO
-        });
-        workerReady=true;
-        status.innerText="Tesseract 初始化完成 ✅";
-    }catch(e){
-        console.error("Tesseract 初始化失敗:", e);
-        status.innerText="Tesseract 初始化失敗 ❌";
-    }
-}
-
-// ===================== OpenCV 初始化 =====================
-if(typeof cv==='undefined'){
-    status.innerText="OpenCV 載入失敗 ❌";
-}else{
-    cv['onRuntimeInitialized']=()=>{ initTesseract(); };
-}
-
-// ===================== OCR =====================
-async function processCanvas(canvas){
-    if(!workerReady){ status.innerText="Tesseract 尚未初始化"; return; }
-    const ctx=previewCanvas.getContext('2d');
-    previewCanvas.width=canvas.width;
-    previewCanvas.height=canvas.height;
-    ctx.drawImage(canvas,0,0);
-
-    try{
-        const { data:{ text } } = await worker.recognize(canvas);
-        ocrPreview.innerText=text.trim().slice(0,300);
-
-        let result={raw:text};
-        let mrzText=text.replace(/\s/g,'');
-        try{
-            const mrz=MRZ.parse(mrzText);
-            if(mrz.valid){
-                result.documentType="Passport";
-                result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
-                result.id=mrz.fields.documentNumber;
-                result.nationality=mrz.fields.nationality;
-                result.birthday=mrz.fields.dateOfBirth;
-                result.expiry=mrz.fields.expirationDate;
-                result.sex=mrz.fields.sex;
-            }else{
-                result.documentType="Taiwan Compatriot Permit";
-                let lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l);
-                result.name=lines[0]||'';
-                result.birthday=lines[1]||'';
-                result.expiry=lines[2]||'';
-            }
-        }catch(e){ result.documentType="Unknown"; }
-        resultPre.innerText=JSON.stringify(result,null,2);
-    }catch(e){ console.error("OCR 失敗:",e); status.innerText="OCR 失敗 ❌"; }
-}
-
-// ===================== 上傳圖片 =====================
-document.getElementById("fileInput").onchange=e=>{
-    if(e.target.files.length>0){
-        const file=e.target.files[0];
-        const img=new Image();
-        img.onload=()=> processCanvas(img);
-        img.src=URL.createObjectURL(file);
-    }
-};
-
-// ===================== 預覽控制 =====================
-closePreview.onclick=()=>{ previewCanvas.style.display='none'; closePreview.style.display='none'; document.getElementById("fileInput").value=''; };
-
-// ===================== 相機拍照 =====================
-const cameraBtn=document.getElementById("cameraBtn");
-const camera=document.getElementById("camera");
-const capture=document.getElementById("capture");
-let liveOCRInterval=null;
-
-cameraBtn.onclick=async()=>{
-    try{
-        const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-        camera.srcObject=stream;
-        camera.style.display='block';
-        capture.style.display='block';
-        if(liveOCRInterval) clearInterval(liveOCRInterval);
-        liveOCRInterval=setInterval(async()=>{
-            if(!workerReady) return;
-            processCanvas(camera);
-        },500);
-    }catch(e){ console.error(e); status.innerText="無法開啟相機 ❌"; }
-};
-
-capture.onclick=async()=>{
-    if(liveOCRInterval){ clearInterval(liveOCRInterval); liveOCRInterval=null; }
-    processCanvas(camera);
+    status.innerText = "載入中…";
+    await worker.load();
+    await worker.loadLanguage('eng+chi_tra+chi_sim');
+    await worker.initialize('eng+chi_tra+chi_sim');
+    status.innerText = "Tesseract 初始化完成 ✅";
 };
 </script>
 </body>
