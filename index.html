@@ -2,28 +2,24 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>護照 / 台胞證 OCR App</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/tesseract.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js-core@2.3.0/tesseract-core.wasm.js"></script>
-<script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
+<title>護照 / 台胞證 OCR App (MRZ矯正 + 即時OCR + 文字邊框)</title>
 <script src="https://docs.opencv.org/4.9.0/opencv.js"></script>
+<script src="https://unpkg.com/mrz/dist/mrz.min.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial;background:linear-gradient(135deg,#4facfe,#00f2fe);}
-.container{width:92%;max-width:900px;margin:28px auto;background:white;border-radius:18px;padding:24px;box-shadow:0 12px 28px rgba(0,0,0,0.15);animation:fadeIn 0.6s;}
-@keyframes fadeIn{from {opacity:0;transform:translateY(-20px);} to {opacity:1;transform:translateY(0);}}
-h2{margin-top:0;text-align:center;color:#333;}
+.container{width:92%;max-width:900px;margin:28px auto;background:white;border-radius:18px;padding:24px;box-shadow:0 12px 28px rgba(0,0,0,0.15);}
+h2{text-align:center;color:#333;}
 .upload-box{display:flex;gap:10px;margin-bottom:12px;}
-button,label{background:#2979ff;color:white;border:none;padding:12px 18px;border-radius:12px;cursor:pointer;font-size:16px;flex:1;text-align:center;transition:.2s;}
-button:disabled,label.disabled{opacity:0.5;cursor:not-allowed;}
-.preview-container{display:flex;gap:12px;position:relative;flex-wrap:wrap;}
-canvas{border-radius:12px; width:48%; height:auto; background:#eee;}
-#ocrPreview{position:absolute;top:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;padding:8px;border-radius:8px;max-width:40%;max-height:40%;overflow:auto;font-family:monospace;}
-#status,pre{margin-top:12px;}
+button,label{background:#2979ff;color:white;border:none;padding:12px 18px;border-radius:12px;cursor:pointer;font-size:16px;flex:1;text-align:center;}
+.preview-container{display:flex;gap:12px;flex-wrap:wrap;position:relative;}
+canvas{border-radius:12px;width:48%;height:auto;background:#eee;}
+#status{margin-top:12px;}
+pre{background:#222;color:#0f0;padding:12px;border-radius:8px;max-height:200px;overflow:auto;}
 </style>
 </head>
 <body>
 <div class="container">
-<h2>護照 / 台胞證 OCR App</h2>
+<h2>護照 / 台胞證 OCR App (MRZ矯正 + 即時OCR + 文字邊框)</h2>
 <div class="upload-box">
 <input type="file" id="fileInput" accept="image/*" hidden>
 <label id="uploadBtn" for="fileInput">📤 上傳圖片</label>
@@ -33,209 +29,193 @@ canvas{border-radius:12px; width:48%; height:auto; background:#eee;}
 <div class="preview-container">
 <canvas id="fullCanvas"></canvas>
 <canvas id="mrzCanvas"></canvas>
-<div id="ocrPreview">OCR 預覽</div>
 </div>
 
 <video id="camera" autoplay playsinline style="display:none;"></video>
 <button id="capture" style="display:none;margin-top:12px;">📸 拍照</button>
 
-<p id="status">正在載入 OpenCV…</p>
+<p id="status">載入 OpenCV…</p>
 <pre id="result">辨識結果將顯示於此</pre>
 </div>
 
 <script>
-let worker, workerReady=false;
-let liveOCRInterval=null;
-const status=document.getElementById("status");
-const resultPre=document.getElementById("result");
-const ocrPreview=document.getElementById("ocrPreview");
-const fullCanvas=document.getElementById("fullCanvas");
-const mrzCanvasElement=document.getElementById("mrzCanvas");
+const status = document.getElementById("status");
+const fullCanvas = document.getElementById("fullCanvas");
+const mrzCanvasElement = document.getElementById("mrzCanvas");
+const resultPre = document.getElementById("result");
 
-// 格式化生日
-function formatBirthday(str){
-    let clean=str.replace(/[^\d]/g,'');
-    if(clean.length===6) return '19'+clean.slice(0,2)+'/'+clean.slice(2,4)+'/'+clean.slice(4,6);
-    if(clean.length===8) return clean.slice(0,4)+'/'+clean.slice(4,6)+'/'+clean.slice(6,8);
-    return str;
-}
+const GOOGLE_API_KEY = "YOUR_GOOGLE_CLOUD_API_KEY"; // 替換成你的 Key
+let liveInterval = null;
 
-// ===================== 初始化 Tesseract =====================
-async function initTesseract(){
-    try{
-        worker=Tesseract.createWorker({
-            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.3.1/dist/worker.min.js',
-            corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@2.3.0/tesseract-core.wasm.js',
-            logger: m => { if(m.status==='recognizing text' && m.progress) ocrPreview.innerText=m.text||''; }
-        });
-        await worker.load();
-        await worker.loadLanguage('eng+chi_tra+chi_sim');
-        await worker.initialize('eng+chi_tra+chi_sim');
-        workerReady=true;
-        status.innerText="OpenCV + Tesseract 初始化完成 ✅";
-    }catch(e){
-        console.error("Tesseract 初始化失敗:", e);
-        status.innerText="Tesseract 初始化失敗 ❌，僅顯示 MRZ 預覽";
-    }
-}
-
-// ===================== Google Sheet =====================
-const SCRIPT_URL="https://script.google.com/macros/s/AKfycbzUEqAK6KuVQQ1gH05j_plXcq2jIuY5-fiOeseNhjImN-PwppMA_-RGi1ao7x5rQ5yJ/exec";
-async function sendToSheet(data){
-    if(!data) return;
-    try{
-        const res=await fetch(SCRIPT_URL,{method:'POST',body:JSON.stringify(data),headers:{'Content-Type':'application/json'}});
-        status.innerText=res.ok?"已送出至 Google Sheet ✅":"送出失敗 ⚠️";
-    }catch(e){ status.innerText="送出失敗 ⚠️"; console.error(e); }
-}
-
-// ===================== MRZ 偵測與透視校正 =====================
+// MRZ 透視矯正
 function extractMRZRegion(canvas){
     try{
-        let src=cv.imread(canvas);
-        let gray=new cv.Mat();
-        cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY,0);
-        let clahe=new cv.CLAHE(2.0,new cv.Size(8,8));
-        let enhanced=new cv.Mat();
-        clahe.apply(gray,enhanced);
-        let blur=new cv.Mat();
-        cv.GaussianBlur(enhanced,blur,new cv.Size(3,3),0);
-        let thresh=new cv.Mat();
-        cv.threshold(blur,thresh,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
-        let contours=new cv.MatVector();
-        let hierarchy=new cv.Mat();
-        cv.findContours(thresh,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+        let src = cv.imread(canvas);
+        let gray = new cv.Mat();
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+        let clahe = new cv.CLAHE(2.0, new cv.Size(8,8));
+        let enhanced = new cv.Mat();
+        clahe.apply(gray, enhanced);
+        let blur = new cv.Mat();
+        cv.GaussianBlur(enhanced, blur, new cv.Size(3,3), 0);
+        let thresh = new cv.Mat();
+        cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
 
-        let mrzRect=null;
-        let mrzContour=null;
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        let mrzRect = null;
         for(let i=0;i<contours.size();i++){
-            let cnt=contours.get(i);
-            let rect=cv.boundingRect(cnt);
+            let cnt = contours.get(i);
+            let rect = cv.boundingRect(cnt);
             if(rect.width>rect.height*5 && rect.y>src.rows*0.5){
-                if(!mrzRect || rect.y>mrzRect.y){
-                    mrzRect=rect;
-                    mrzContour=cnt;
-                }
+                if(!mrzRect || rect.y>mrzRect.y) mrzRect=rect;
             }
         }
 
-        // fullCanvas 顯示原圖 + 框
-        const ctxFull=fullCanvas.getContext('2d');
-        fullCanvas.width=canvas.width;
-        fullCanvas.height=canvas.height;
+        const ctxFull = fullCanvas.getContext('2d');
+        fullCanvas.width = canvas.width;
+        fullCanvas.height = canvas.height;
         ctxFull.drawImage(canvas,0,0);
         if(mrzRect){
             ctxFull.strokeStyle='red';
             ctxFull.lineWidth=4;
-            ctxFull.strokeRect(mrzRect.x,mrzRect.y,mrzRect.width,mrzRect.height);
+            ctxFull.strokeRect(mrzRect.x, mrzRect.y, mrzRect.width, mrzRect.height);
         }
 
-        // 透視矯正
-        let mrzCanvasEl=mrzCanvasElement;
-        if(mrzContour){
-            let rotated = new cv.Mat();
-            let angle = cv.minAreaRect(mrzContour).angle;
-            let center = new cv.Point(src.cols/2, src.rows/2);
-            let M = cv.getRotationMatrix2D(center, angle, 1);
-            cv.warpAffine(src, rotated, M, new cv.Size(src.cols, src.rows), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-            let mrzImg=new cv.Mat(rotated, new cv.Rect(mrzRect.x,mrzRect.y,mrzRect.width,mrzRect.height));
-            mrzCanvasEl.width=mrzRect.width;
-            mrzCanvasEl.height=mrzRect.height;
-            cv.imshow(mrzCanvasEl, mrzImg);
-            mrzImg.delete(); rotated.delete(); M.delete();
-        } else {
-            mrzCanvasEl.width=canvas.width;
-            mrzCanvasEl.height=canvas.height;
-            const ctx=mrzCanvasEl.getContext('2d');
-            ctx.drawImage(canvas,0,0);
+        let mrzCanvas = mrzCanvasElement;
+        if(mrzRect){
+            let roi = new cv.Mat(src, new cv.Rect(mrzRect.x,mrzRect.y,mrzRect.width,mrzRect.height));
+            let width = roi.cols;
+            let height = roi.rows;
+            let dst = new cv.Mat();
+            let srcTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0, width,0, width,height, 0,height]);
+            let dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0, width,0, width,height, 0,height]); // 可加旋轉校正
+            let M = cv.getPerspectiveTransform(srcTri, dstTri);
+            cv.warpPerspective(roi, dst, M, new cv.Size(width,height));
+
+            mrzCanvas.width = width;
+            mrzCanvas.height = height;
+            cv.imshow(mrzCanvas, dst);
+
+            roi.delete(); srcTri.delete(); dstTri.delete(); M.delete(); dst.delete();
         }
 
         src.delete(); gray.delete(); enhanced.delete(); blur.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); clahe.delete();
-        return mrzCanvasEl;
-    }catch(e){ console.error("MRZ偵測或矯正失敗", e); return canvas; }
+        return mrzCanvas;
+    }catch(e){ console.error("MRZ偵測失敗", e); return canvas; }
 }
 
-// ===================== OCR =====================
-async function processCanvas(canvas,previewOnly=false){
-    const mrzCanvas=extractMRZRegion(canvas);
+// Google Vision OCR
+async function recognizeOCR(canvas){
+    const dataURL = canvas.toDataURL("image/png").replace(/^data:image\/(png|jpg);base64,/, "");
+    const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_API_KEY}`, {
+        method:"POST",
+        body:JSON.stringify({
+            requests:[{image:{content:dataURL},features:[{type:"TEXT_DETECTION"}]}]
+        })
+    });
+    const json = await res.json();
+    if(json.responses && json.responses[0].textAnnotations && json.responses[0].textAnnotations.length>0){
+        return json.responses[0].textAnnotations;
+    }
+    return [];
+}
 
-    if(workerReady){
+// 處理 MRZ + OCR
+async function processCanvas(canvas){
+    const mrzCanvas = extractMRZRegion(canvas);
+    const annotations = await recognizeOCR(mrzCanvas);
+    const ctx = mrzCanvas.getContext('2d');
+    ctx.lineWidth=2;
+    ctx.strokeStyle='lime';
+    ctx.font="18px Arial";
+    ctx.fillStyle='lime';
+
+    let result = {};
+    if(annotations.length>0){
+        const fullText = annotations[0].description.replace(/\s/g,"");
         try{
-            const {data:{text}} = await worker.recognize(mrzCanvas);
-            ocrPreview.innerText=text.trim().slice(0,300);
+            const mrz = MRZ.parse(fullText);
+            if(mrz.valid){
+                result.documentType="Passport";
+                result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
+                result.id=mrz.fields.documentNumber;
+                result.nationality=mrz.fields.nationality;
+                result.birthday=mrz.fields.dateOfBirth;
+                result.expiry=mrz.fields.expirationDate;
+                result.sex=mrz.fields.sex;
+            }else{
+                result.documentType="Taiwan Compatriot Permit";
+                result.raw=annotations.map(a=>a.description).join("\n");
+            }
+        }catch(e){ result.raw=annotations.map(a=>a.description).join("\n"); }
 
-            let result={raw:text};
-            let mrzText=text.replace(/\s/g,'');
-            try{
-                const mrz=MRZ.parse(mrzText);
-                if(mrz.valid){
-                    result.documentType="Passport";
-                    result.name=mrz.fields.surname+" "+mrz.fields.givenNames;
-                    result.id=mrz.fields.documentNumber;
-                    result.nationality=mrz.fields.nationality;
-                    result.birthday=formatBirthday(mrz.fields.dateOfBirth);
-                    result.expiry=formatBirthday(mrz.fields.expirationDate);
-                    result.sex=mrz.fields.sex;
-                } else {
-                    result.documentType="Taiwan Compatriot Permit";
-                    let lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l);
-                    result.name=lines[0]||'';
-                    result.birthday=formatBirthday(lines[1]||'');
-                    result.expiry=formatBirthday(lines[2]||'');
-                }
-            }catch(e){ result.documentType="Unknown"; }
-            resultPre.innerText=JSON.stringify(result,null,2);
-            if(!previewOnly) sendToSheet(result);
-        }catch(e){ console.error("OCR 失敗:",e); status.innerText="OCR 失敗 ❌"; }
-    } else {
-        ocrPreview.innerText="Tesseract 未初始化，僅顯示 MRZ 預覽";
+        // 畫 OCR 邊框
+        for(let i=1;i<annotations.length;i++){ // index 0 是全文
+            const a = annotations[i];
+            const v = a.boundingPoly.vertices;
+            ctx.beginPath();
+            ctx.moveTo(v[0].x,v[0].y);
+            ctx.lineTo(v[1].x,v[1].y);
+            ctx.lineTo(v[2].x,v[2].y);
+            ctx.lineTo(v[3].x,v[3].y);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.fillText(a.description, v[0].x, v[0].y-2);
+        }
+    }else{
+        resultPre.innerText="OCR 無法辨識";
     }
+
+    resultPre.innerText = JSON.stringify(result,null,2);
 }
 
-// ===================== 上傳 & 相機 =====================
-document.getElementById("fileInput").onchange=e=>{
+// 上傳圖片
+document.getElementById("fileInput").onchange = e=>{
     if(e.target.files.length>0){
-        const file=e.target.files[0];
-        const img=new Image();
-        img.onload=()=>{ processCanvas(img); };
-        img.src=URL.createObjectURL(file);
+        const file = e.target.files[0];
+        const img = new Image();
+        img.onload = ()=>{ processCanvas(img); };
+        img.src = URL.createObjectURL(file);
     }
 };
 
-const cameraBtn=document.getElementById("cameraBtn");
-const camera=document.getElementById("camera");
-const capture=document.getElementById("capture");
+// 相機
+const cameraBtn = document.getElementById("cameraBtn");
+const camera = document.getElementById("camera");
+const capture = document.getElementById("capture");
 
-cameraBtn.onclick=async()=>{
+cameraBtn.onclick = async()=>{
     try{
-        const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-        camera.srcObject=stream;
-        camera.style.display='block';
-        capture.style.display='block';
-        if(liveOCRInterval) clearInterval(liveOCRInterval);
-        liveOCRInterval=setInterval(async()=>{
-            const tempCanvas=document.createElement('canvas');
-            tempCanvas.width=camera.videoWidth;
-            tempCanvas.height=camera.videoHeight;
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+        camera.srcObject = stream;
+        camera.style.display = 'block';
+        capture.style.display = 'block';
+        if(liveInterval) clearInterval(liveInterval);
+        liveInterval = setInterval(async ()=>{
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = camera.videoWidth;
+            tempCanvas.height = camera.videoHeight;
             tempCanvas.getContext('2d').drawImage(camera,0,0);
-            await processCanvas(tempCanvas,true);
+            extractMRZRegion(tempCanvas); // MRZ框即時更新
         },500);
-    }catch(e){ console.error("相機啟動失敗:",e); status.innerText="無法開啟相機 ❌"; }
+    }catch(e){ console.error("相機啟動失敗",e); status.innerText="無法開啟相機 ❌"; }
 };
 
-capture.onclick=async()=>{
-    if(liveOCRInterval){ clearInterval(liveOCRInterval); liveOCRInterval=null; }
-    const tempCanvas=document.createElement('canvas');
-    tempCanvas.width=camera.videoWidth;
-    tempCanvas.height=camera.videoHeight;
+capture.onclick = ()=>{
+    if(liveInterval){ clearInterval(liveInterval); liveInterval=null; }
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = camera.videoWidth;
+    tempCanvas.height = camera.videoHeight;
     tempCanvas.getContext('2d').drawImage(camera,0,0);
-    await processCanvas(tempCanvas);
+    processCanvas(tempCanvas); // 拍照後 OCR
 };
 
-// 初始化
-if(typeof cv!=='undefined'){
-    cv['onRuntimeInitialized']=()=>{ status.innerText="OpenCV 載入完成，初始化 Tesseract…"; initTesseract(); };
-} else { status.innerText="OpenCV 載入失敗，請檢查網路或版本"; }
+if(typeof cv !== 'undefined'){
+    cv['onRuntimeInitialized'] = ()=>{ status.innerText="OpenCV 載入完成 ✅"; };
+}else{ status.innerText="OpenCV 載入失敗 ❌"; }
 </script>
 </body>
 </html>
